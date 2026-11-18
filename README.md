@@ -43,6 +43,8 @@ Optional:
 - `timezone`: IANA timezone for the displayed times. Default `Europe/Berlin`.
 - `auto_increment`: `true` or `false` (default). When `true`, the boat number
   is increased by one after each "Record now".
+- `show_all_records`: `true` or `false` (default). State of the "Show all
+  records" checkbox. The app writes it back when you toggle the checkbox.
 
 ## Run
 
@@ -57,9 +59,11 @@ uv run python -m rve_timing
    The current time is sent as the passing time to the configured station.
    The arrow buttons next to the field, or the Up and Down keys, change the
    boat number by one without recording it.
-3. The table shows all entries of the station, including corrections and
-   delete markers (column "Deleted", greyed out). "Current" marks the latest
-   entry of each boat. Click "Refresh" to reload it.
+3. The table shows the current entry of each boat. Boats whose current entry
+   is a delete marker are left out. Tick "Show all records" to see every entry,
+   including corrections and delete markers (column "Deleted", greyed out).
+   "Current" marks the latest entry of each boat. The checkbox state is saved
+   in `config.json`. Click "Refresh" to reload the list.
 4. To correct a time, select an entry and click "Edit time ..." (or double
    click it). Enter the new time as HH:MM:SS. The date stays the same. This
    sends a new entry, the latest one wins.

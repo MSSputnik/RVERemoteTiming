@@ -45,6 +45,7 @@ class Config:
     username: str = ""
     timezone: str = "Europe/Berlin"
     auto_increment: bool = False
+    show_all_records: bool = False
     refresh_token: str = ""  # decoded; empty when login is not remembered
 
 
@@ -83,6 +84,10 @@ def load_config(path: Path | None = None) -> Config:
     if not isinstance(auto_increment, bool):
         raise ConfigError("auto_increment must be true or false.")
 
+    show_all_records = raw.get("show_all_records", False)
+    if not isinstance(show_all_records, bool):
+        raise ConfigError("show_all_records must be true or false.")
+
     refresh_token = ""
     if raw.get(REFRESH_TOKEN_KEY):
         try:
@@ -98,6 +103,7 @@ def load_config(path: Path | None = None) -> Config:
         username=str(raw.get("username", "")),
         timezone=str(raw.get("timezone", "Europe/Berlin")),
         auto_increment=auto_increment,
+        show_all_records=show_all_records,
         refresh_token=refresh_token,
     )
 
@@ -107,13 +113,23 @@ def save_refresh_token(token: str | None, path: Path | None = None) -> None:
 
     None or an empty string removes it. All other keys are kept.
     """
+    _update_config(REFRESH_TOKEN_KEY, xor_encode(token) if token else None, path)
+
+
+def save_show_all_records(value: bool, path: Path | None = None) -> None:
+    """Store the state of the "Show all records" checkbox."""
+    _update_config("show_all_records", value, path)
+
+
+def _update_config(key: str, value: object, path: Path | None) -> None:
+    """Set a key in the config file (None removes it), keeping all others."""
     path = path or config_path()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if token:
-            raw[REFRESH_TOKEN_KEY] = xor_encode(token)
+        if value is None:
+            raw.pop(key, None)
         else:
-            raw.pop(REFRESH_TOKEN_KEY, None)
+            raw[key] = value
         path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError) as exc:
         raise ConfigError(f"Cannot write configuration '{path}': {exc}") from exc

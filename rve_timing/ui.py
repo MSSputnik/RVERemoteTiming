@@ -14,7 +14,12 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .api import ApiClient, ApiError
 from .auth import AuthUnavailable, CognitoAuth
-from .config import Config, ConfigError, save_refresh_token
+from .config import (
+    Config,
+    ConfigError,
+    save_refresh_token,
+    save_show_all_records,
+)
 from .version import APP_NAME, APP_VERSION
 
 RETRY_INTERVAL_MS = 10_000
@@ -264,6 +269,13 @@ class App(tk.Tk):
         bar = ttk.Frame(self._container)
         bar.pack(fill="x")
         ttk.Label(bar, text="Recorded timings").pack(side="left")
+        self._show_all_var = tk.BooleanVar(value=self.config_.show_all_records)
+        ttk.Checkbutton(
+            bar,
+            text="Show all records",
+            variable=self._show_all_var,
+            command=self._toggle_show_all,
+        ).pack(side="left", padx=12)
         ttk.Button(bar, text="Refresh", command=self._refresh).pack(side="right")
         ttk.Button(bar, text="Delete", command=self._delete_selected).pack(
             side="right", padx=4
@@ -293,6 +305,7 @@ class App(tk.Tk):
         self._tree.bind("<Delete>", lambda _e: self._delete_selected())
         self._tree.bind("<Double-1>", lambda _e: self._edit_selected())
         self._items: dict[str, dict[str, Any]] = {}
+        self._all_items: list[dict[str, Any]] = []
 
         self._update_pending_label()
         self._refresh()
@@ -421,9 +434,25 @@ class App(tk.Tk):
             dt = dt.astimezone(self._tz)
         return dt.strftime("%H:%M:%S")
 
+    def _toggle_show_all(self) -> None:
+        try:
+            save_show_all_records(self._show_all_var.get())
+        except ConfigError as exc:
+            self._status.set(f"Cannot save the setting: {exc}")
+        self._render_timings()
+
     def _show_timings(self, items: list[dict[str, Any]]) -> None:
+        self._all_items = items
+        self._render_timings()
+
+    def _render_timings(self) -> None:
         if not self._tree.winfo_exists():
             return
+        items = self._all_items
+        if not self._show_all_var.get():
+            # Only the current entry of each boat; boats whose current entry
+            # is a delete marker are left out.
+            items = [i for i in items if i["current"] and not i.get("deleted")]
         selected = self._tree.selection()
         self._tree.delete(*self._tree.get_children())
         self._items = {}

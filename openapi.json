@@ -182,7 +182,7 @@
           },
           "version": {
             "examples": [
-              "1.0.0"
+              "1.1.0"
             ],
             "title": "Version",
             "type": "string"
@@ -228,6 +228,12 @@
             "title": "Boat Number",
             "type": "integer"
           },
+          "deleted": {
+            "default": false,
+            "description": "True marks this entry as a delete marker: the boat is treated as deleted while this is its latest entry (by recorded_at). The history is kept. A later normal entry brings the boat back.",
+            "title": "Deleted",
+            "type": "boolean"
+          },
           "entry_id": {
             "description": "Client generated UUID (any version). Reuse it when retrying.",
             "format": "uuid",
@@ -235,10 +241,17 @@
             "type": "string"
           },
           "passed_at": {
-            "description": "Client passing time, ISO 8601 with timezone. Times without timezone are rejected.",
-            "format": "date-time",
-            "title": "Passed At",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Client passing time, ISO 8601 with timezone. Times without timezone are rejected. Required unless deleted is true.",
+            "title": "Passed At"
           },
           "recorded_at": {
             "description": "Client time of the entry, ISO 8601 with timezone. Times without timezone are rejected.",
@@ -250,7 +263,6 @@
         "required": [
           "entry_id",
           "boat_number",
-          "passed_at",
           "recorded_at"
         ],
         "title": "TimingInput",
@@ -267,15 +279,29 @@
             "title": "Current",
             "type": "boolean"
           },
+          "deleted": {
+            "default": false,
+            "description": "True for a delete marker. Shown in the history like every other entry.",
+            "title": "Deleted",
+            "type": "boolean"
+          },
           "entry_id": {
             "format": "uuid",
             "title": "Entry Id",
             "type": "string"
           },
           "passed_at": {
-            "format": "date-time",
-            "title": "Passed At",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Missing for a delete marker without a passing time.",
+            "title": "Passed At"
           },
           "received_at": {
             "format": "date-time",
@@ -291,7 +317,6 @@
         "required": [
           "boat_number",
           "entry_id",
-          "passed_at",
           "recorded_at",
           "received_at",
           "current"
@@ -418,7 +443,7 @@
     },
     "/exports/{station}": {
       "get": {
-        "description": "Current value per boat of a station. trz (default) is number, TAB, time with CRLF line endings and no header. csv is 'number;time' with a header line. Time is HH:MM:SS in the timezone of the tz parameter (default Europe/Berlin). Boats without an entry are not listed. Roles: Admin, Regattaleitung.",
+        "description": "Current value per boat of a station. trz (default) is number, TAB, time with CRLF line endings and no header. csv is 'number;time' with a header line. Time is HH:MM:SS in the timezone of the tz parameter (default Europe/Berlin). Boats without an entry and boats whose latest entry is a delete marker (deleted=true) are not listed. Roles: Admin, Regattaleitung.",
         "operationId": "getExport",
         "parameters": [
           {
@@ -787,7 +812,7 @@
     },
     "/timings/{station}": {
       "get": {
-        "description": "Returns the whole partition of a station, all entries with the current one marked. Roles: Admin, Zeitnahme_Start, Zeitnahme_3000m, Zeitnahme_6000m, Regattaleitung (all stations).",
+        "description": "Returns the whole partition of a station, all entries (delete markers included) with the current one marked. Roles: Admin, Zeitnahme_Start, Zeitnahme_3000m, Zeitnahme_6000m, Regattaleitung (all stations).",
         "operationId": "getTimings",
         "parameters": [
           {
@@ -867,7 +892,7 @@
         ]
       },
       "post": {
-        "description": "Records a passing time at a station. Roles: Admin, or the station's own group (Zeitnahme_Start for start, Zeitnahme_3000m for 3000m, Zeitnahme_6000m for 6000m). Idempotent per entry_id: a repeat returns 200 with status duplicate. Corrections are new entries, the latest recorded_at wins.",
+        "description": "Records a passing time at a station. Roles: Admin, or the station's own group (Zeitnahme_Start for start, Zeitnahme_3000m for 3000m, Zeitnahme_6000m for 6000m). Idempotent per entry_id: a repeat returns 200 with status duplicate. Corrections are new entries, the latest recorded_at wins. With deleted=true the entry is a delete marker (soft delete): the boat is left out of the exports while the marker is its latest entry, the history is kept, and passed_at is optional.",
         "operationId": "postTiming",
         "parameters": [
           {

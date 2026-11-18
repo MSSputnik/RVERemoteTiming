@@ -64,20 +64,30 @@ class ApiClient:
         self,
         station: str,
         boat_number: int,
-        passed_at: datetime,
+        passed_at: datetime | None,
         entry_id: uuid.UUID | None = None,
         recorded_at: datetime | None = None,
+        deleted: bool = False,
     ) -> dict[str, Any]:
-        """Record a passing time. Reuse entry_id when retrying (idempotent)."""
-        if passed_at.tzinfo is None:
+        """Record a passing time, or a delete marker with deleted=True.
+
+        Reuse entry_id when retrying (idempotent). A correction is a new
+        entry: the latest recorded_at wins.
+        """
+        if passed_at is None and not deleted:
+            raise ValueError("passed_at is required unless deleted is true")
+        if passed_at is not None and passed_at.tzinfo is None:
             raise ValueError("passed_at needs a timezone")
         recorded_at = recorded_at or datetime.now().astimezone()
-        body = {
+        body: dict[str, Any] = {
             "entry_id": str(entry_id or uuid.uuid4()),
             "boat_number": boat_number,
-            "passed_at": passed_at.isoformat(),
             "recorded_at": recorded_at.isoformat(),
         }
+        if passed_at is not None:
+            body["passed_at"] = passed_at.isoformat()
+        if deleted:
+            body["deleted"] = True
         return self._request("POST", f"/timings/{station}", json=body).json()
 
     def list_race_info(self, include_deleted: bool = False) -> list[dict[str, Any]]:

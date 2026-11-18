@@ -57,8 +57,15 @@ uv run python -m rve_timing
    The current time is sent as the passing time to the configured station.
    The arrow buttons next to the field, or the Up and Down keys, change the
    boat number by one without recording it.
-3. The table shows the recorded timings of the station. Click "Refresh" to
-   reload it.
+3. The table shows all entries of the station, including corrections and
+   delete markers (column "Deleted", greyed out). "Current" marks the latest
+   entry of each boat. Click "Refresh" to reload it.
+4. To correct a time, select an entry and click "Edit time ..." (or double
+   click it). Enter the new time as HH:MM:SS. The date stays the same. This
+   sends a new entry, the latest one wins.
+5. To delete a timing, select an entry and click "Delete" (or press the Delete
+   key). This sends a delete marker for the boat. The history is kept, and a
+   later normal entry brings the boat back.
 
 Entries that cannot be sent, for example because of a network problem, are
 kept and retried every 10 seconds. The same `entry_id` is reused, so the API

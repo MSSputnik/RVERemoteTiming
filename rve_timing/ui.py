@@ -7,7 +7,7 @@ import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, time
 from tkinter import messagebox, ttk
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -26,8 +26,9 @@ class PendingEntry:
 
     entry_id: uuid.UUID
     boat_number: int
-    passed_at: datetime
+    passed_at: datetime | None
     recorded_at: datetime
+    deleted: bool = False
 
 
 class App(tk.Tk):
@@ -264,8 +265,14 @@ class App(tk.Tk):
         bar.pack(fill="x")
         ttk.Label(bar, text="Recorded timings").pack(side="left")
         ttk.Button(bar, text="Refresh", command=self._refresh).pack(side="right")
+        ttk.Button(bar, text="Delete", command=self._delete_selected).pack(
+            side="right", padx=4
+        )
+        ttk.Button(bar, text="Edit time ...", command=self._edit_selected).pack(
+            side="right"
+        )
 
-        cols = ("boat", "passed", "recorded", "current")
+        cols = ("boat", "passed", "recorded", "current", "deleted")
         self._tree = ttk.Treeview(
             self._container, columns=cols, show="headings", height=12
         )
@@ -274,6 +281,7 @@ class App(tk.Tk):
             ("passed", "Passed at", 160),
             ("recorded", "Recorded at", 160),
             ("current", "Current", 70),
+            ("deleted", "Deleted", 70),
         ):
             self._tree.heading(col, text=title)
             self._tree.column(col, width=width, anchor="center")
@@ -281,6 +289,10 @@ class App(tk.Tk):
         self._tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self._tree.pack(fill="both", expand=True, pady=(4, 0))
+        self._tree.tag_configure("deleted", foreground="#888")
+        self._tree.bind("<Delete>", lambda _e: self._delete_selected())
+        self._tree.bind("<Double-1>", lambda _e: self._edit_selected())
+        self._items: dict[str, dict[str, Any]] = {}
 
         self._update_pending_label()
         self._refresh()
@@ -338,6 +350,7 @@ class App(tk.Tk):
                 entry.passed_at,
                 entry.entry_id,
                 entry.recorded_at,
+                entry.deleted,
             )
 
         self._run_async(
@@ -351,7 +364,10 @@ class App(tk.Tk):
         if self._pending and self._pending[0] is entry:
             self._pending.popleft()
         self._update_pending_label()
-        state = "already existed" if result.get("status") == "duplicate" else "saved"
+        if result.get("status") == "duplicate":
+            state = "already existed"
+        else:
+            state = "deleted" if entry.deleted else "saved"
         self._status.set(f"Boat {entry.boat_number}: {state}.")
         self._refresh()
         self._send_pending()
@@ -408,18 +424,139 @@ class App(tk.Tk):
     def _show_timings(self, items: list[dict[str, Any]]) -> None:
         if not self._tree.winfo_exists():
             return
+        selected = self._tree.selection()
         self._tree.delete(*self._tree.get_children())
+        self._items = {}
         for item in sorted(items, key=lambda i: i["recorded_at"], reverse=True):
+            deleted = bool(item.get("deleted"))
+            passed = item.get("passed_at")
+            # entry_id is only unique per boat, so the boat is part of the key.
+            iid = f"{item['boat_number']}:{item['entry_id']}"
+            self._items[iid] = item
             self._tree.insert(
                 "",
                 "end",
+                iid=iid,
                 values=(
                     item["boat_number"],
-                    self._fmt(item["passed_at"]),
+                    self._fmt(passed) if passed else "-",
                     self._fmt(item["recorded_at"]),
                     "yes" if item["current"] else "",
+                    "yes" if deleted else "",
                 ),
+                tags=("deleted",) if deleted else (),
             )
+        keep = [i for i in selected if i in self._items]
+        if keep:
+            self._tree.selection_set(keep)
+
+    def _selected_item(self) -> dict[str, Any] | None:
+        sel = self._tree.selection()
+        if not sel:
+            self._status.set("Select a timing in the list first.")
+            return None
+        return self._items.get(sel[0])
+
+    def _delete_selected(self) -> None:
+        item = self._selected_item()
+        if item is None:
+            return
+        boat = item["boat_number"]
+        if item.get("deleted") and item["current"]:
+            self._status.set(f"Boat {boat} is already deleted.")
+            return
+        if not messagebox.askyesno(
+            "Delete timing", f"Mark boat {boat} as deleted?", parent=self
+        ):
+            return
+        self._pending.append(
+            PendingEntry(
+                uuid.uuid4(),
+                boat,
+                passed_at=None,
+                recorded_at=self._now(),
+                deleted=True,
+            )
+        )
+        self._update_pending_label()
+        self._send_pending()
+
+    def _edit_selected(self) -> None:
+        item = self._selected_item()
+        if item is None:
+            return
+        if not item.get("passed_at"):
+            self._status.set("This entry has no passing time to edit.")
+            return
+        try:
+            old = datetime.fromisoformat(item["passed_at"])
+        except ValueError:
+            self._status.set("Cannot read the passing time of this entry.")
+            return
+        if self._tz:
+            old = old.astimezone(self._tz)
+        new = _ask_time(self, item["boat_number"], old)
+        if new is None or new == old:
+            return
+        # A correction is a new entry; the latest recorded_at wins.
+        self._pending.append(
+            PendingEntry(
+                uuid.uuid4(),
+                item["boat_number"],
+                passed_at=new,
+                recorded_at=self._now(),
+            )
+        )
+        self._update_pending_label()
+        self._send_pending()
+
+
+def _parse_time(text: str, base: datetime) -> datetime | None:
+    """Parse HH:MM:SS[.fff] on the date and timezone of base."""
+    try:
+        t = time.fromisoformat(text.strip())
+    except ValueError:
+        return None
+    return datetime.combine(base.date(), t, tzinfo=base.tzinfo)
+
+
+def _ask_time(parent: tk.Tk, boat: int, old: datetime) -> datetime | None:
+    """Modal dialog to change a passing time. Returns None when cancelled."""
+    dlg = tk.Toplevel(parent)
+    dlg.title(f"Edit time - boat {boat}")
+    dlg.transient(parent)
+    dlg.resizable(False, False)
+    frame = ttk.Frame(dlg, padding=12)
+    frame.pack()
+    ttk.Label(frame, text=f"Passed at (HH:MM:SS), date {old.date().isoformat()}").grid(
+        row=0, column=0, columnspan=2, pady=(0, 6)
+    )
+    var = tk.StringVar(value=old.strftime("%H:%M:%S"))
+    entry = ttk.Entry(frame, textvariable=var, width=14, justify="center")
+    entry.grid(row=1, column=0, columnspan=2, pady=4)
+    error = tk.StringVar()
+    ttk.Label(frame, textvariable=error, foreground="#b00").grid(
+        row=2, column=0, columnspan=2
+    )
+    result: list[datetime] = []
+
+    def ok() -> None:
+        new = _parse_time(var.get(), old)
+        if new is None:
+            error.set("Use the format HH:MM:SS")
+            return
+        result.append(new)
+        dlg.destroy()
+
+    ttk.Button(frame, text="Update", command=ok).grid(row=3, column=0, pady=8)
+    ttk.Button(frame, text="Cancel", command=dlg.destroy).grid(row=3, column=1)
+    dlg.bind("<Return>", lambda _e: ok())
+    dlg.bind("<Escape>", lambda _e: dlg.destroy())
+    entry.focus_set()
+    entry.select_range(0, "end")
+    dlg.grab_set()
+    parent.wait_window(dlg)
+    return result[0] if result else None
 
 
 def run(config: Config) -> None:

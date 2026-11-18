@@ -44,6 +44,7 @@ class Config:
     region: str
     username: str = ""
     timezone: str = "Europe/Berlin"
+    auto_increment: bool = False
     refresh_token: str = ""  # decoded; empty when login is not remembered
 
 
@@ -78,6 +79,10 @@ def load_config(path: Path | None = None) -> Config:
             f"station must be one of {', '.join(STATIONS)}, got '{station}'"
         )
 
+    auto_increment = raw.get("auto_increment", False)
+    if not isinstance(auto_increment, bool):
+        raise ConfigError("auto_increment must be true or false.")
+
     refresh_token = ""
     if raw.get(REFRESH_TOKEN_KEY):
         try:
@@ -92,6 +97,7 @@ def load_config(path: Path | None = None) -> Config:
         region=str(raw["region"]),
         username=str(raw.get("username", "")),
         timezone=str(raw.get("timezone", "Europe/Berlin")),
+        auto_increment=auto_increment,
         refresh_token=refresh_token,
     )
 

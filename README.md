@@ -41,6 +41,8 @@ Optional:
 
 - `username`: pre-fills the username on the sign-in screen.
 - `timezone`: IANA timezone for the displayed times. Default `Europe/Berlin`.
+- `auto_increment`: `true` or `false` (default). When `true`, the boat number
+  is increased by one after each "Record now".
 
 ## Run
 
@@ -51,8 +53,10 @@ uv run python -m rve_timing
 ## Usage
 
 1. Sign in with your Cognito username and password.
-2. Type a boat number and press Enter or click "Record now". The current time
-   is sent as the passing time to the configured station.
+2. Type a boat number and press Enter, the `s` key or click "Record now (s)".
+   The current time is sent as the passing time to the configured station.
+   The arrow buttons next to the field, or the Up and Down keys, change the
+   boat number by one without recording it.
 3. The table shows the recorded timings of the station. Click "Refresh" to
    reload it.
 

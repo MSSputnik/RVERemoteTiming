@@ -42,6 +42,11 @@ class App(tk.Tk):
         except ZoneInfoNotFoundError:
             self._tz = None
         self._remember = False
+        self._main_active = False
+        self.bind("<Up>", self._key_up)
+        self.bind("<Down>", self._key_down)
+        self.bind("<s>", self._key_s)
+        self.bind("<S>", self._key_s)
         self._auth = CognitoAuth(
             config.client_id, config.region, self._store_refresh_token
         )
@@ -112,6 +117,7 @@ class App(tk.Tk):
             self._status.set(f"Cannot remove stored login: {exc}")
 
     def _clear(self) -> None:
+        self._main_active = False
         for child in self._container.winfo_children():
             child.destroy()
 
@@ -222,13 +228,33 @@ class App(tk.Tk):
         entry_frame.pack(fill="x", pady=8)
         ttk.Label(entry_frame, text="Boat number").pack(side="left")
         self._boat_var = tk.StringVar()
-        boat = ttk.Entry(entry_frame, textvariable=self._boat_var, width=10)
-        boat.pack(side="left", padx=6)
+        # Large number; fill="y" stretches the field to the height of the
+        # two arrow buttons next to it.
+        boat = ttk.Entry(
+            entry_frame,
+            textvariable=self._boat_var,
+            width=6,
+            font=("TkDefaultFont", 22),
+            justify="center",
+        )
+        boat.pack(side="left", padx=6, fill="y")
         boat.bind("<Return>", lambda _e: self._record())
+        # The entry would insert the typed letter, so handle s here and stop it.
+        for key in ("<s>", "<S>"):
+            boat.bind(key, lambda _e: self._record_key())
         boat.focus_set()
-        ttk.Button(entry_frame, text="Record now", command=self._record).pack(
+        arrows = ttk.Frame(entry_frame)
+        arrows.pack(side="left", padx=(0, 6))
+        ttk.Button(
+            arrows, text="\u25b2", width=3, command=lambda: self._step_boat(1)
+        ).pack()
+        ttk.Button(
+            arrows, text="\u25bc", width=3, command=lambda: self._step_boat(-1)
+        ).pack()
+        ttk.Button(entry_frame, text="Record now (s)", command=self._record).pack(
             side="left"
         )
+        self._main_active = True
         self._pending_var = tk.StringVar()
         ttk.Label(entry_frame, textvariable=self._pending_var, foreground="#b00").pack(
             side="right"
@@ -259,6 +285,28 @@ class App(tk.Tk):
         self._update_pending_label()
         self._refresh()
 
+    def _key_up(self, _event: tk.Event) -> None:
+        if self._main_active and self.focus_get() is not self._tree:
+            self._step_boat(1)
+
+    def _key_down(self, _event: tk.Event) -> None:
+        if self._main_active and self.focus_get() is not self._tree:
+            self._step_boat(-1)
+
+    def _key_s(self, _event: tk.Event) -> None:
+        if self._main_active:
+            self._record()
+
+    def _record_key(self) -> str:
+        self._record()
+        return "break"
+
+    def _step_boat(self, delta: int) -> None:
+        """Change the boat number without recording it."""
+        text = self._boat_var.get().strip()
+        current = int(text) if text.isdigit() else 0
+        self._boat_var.set(str(max(0, current + delta)))
+
     def _update_pending_label(self) -> None:
         if hasattr(self, "_pending_var"):
             n = len(self._pending)
@@ -273,7 +321,7 @@ class App(tk.Tk):
         self._pending.append(
             PendingEntry(uuid.uuid4(), int(text), passed_at=now, recorded_at=now)
         )
-        self._boat_var.set("")
+        self._boat_var.set(str(int(text) + 1) if self.config_.auto_increment else "")
         self._update_pending_label()
         self._send_pending()
 

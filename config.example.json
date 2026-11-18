@@ -1,0 +1,8 @@
+{
+  "client_id": "your-cognito-app-client-id",
+  "region": "eu-west-1",
+  "station": "start",
+  "base_url": "https://langstrecke-api.mssputnik.click",
+  "username": "",
+  "timezone": "Europe/Berlin"
+}

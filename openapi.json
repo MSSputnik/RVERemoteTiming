@@ -1,0 +1,998 @@
+{
+  "components": {
+    "schemas": {
+      "ErrorResponse": {
+        "properties": {
+          "error": {
+            "examples": [
+              "forbidden"
+            ],
+            "title": "Error",
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "title": "ErrorResponse",
+        "type": "object"
+      },
+      "ExportFormat": {
+        "enum": [
+          "csv",
+          "trz"
+        ],
+        "title": "ExportFormat",
+        "type": "string"
+      },
+      "InitDatabaseRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "scope": {
+            "enum": [
+              "timings",
+              "race_info",
+              "all"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "title": "InitDatabaseRequest",
+        "type": "object"
+      },
+      "InitDatabaseResult": {
+        "properties": {
+          "deleted": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Deleted",
+            "type": "object"
+          },
+          "scope": {
+            "enum": [
+              "timings",
+              "race_info",
+              "all"
+            ],
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scope",
+          "deleted"
+        ],
+        "title": "InitDatabaseResult",
+        "type": "object"
+      },
+      "MeResponse": {
+        "properties": {
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "groups"
+        ],
+        "title": "MeResponse",
+        "type": "object"
+      },
+      "RaceInfoItem": {
+        "additionalProperties": true,
+        "description": "A stored race info row. Attributes of further CSV columns are included as text.",
+        "properties": {
+          "boat_number": {
+            "title": "Boat Number",
+            "type": "integer"
+          },
+          "deleted": {
+            "title": "Deleted",
+            "type": "boolean"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "race_number": {
+            "title": "Race Number",
+            "type": "integer"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "boat_number",
+          "race_number",
+          "name",
+          "deleted",
+          "updated_at"
+        ],
+        "title": "RaceInfoItem",
+        "type": "object"
+      },
+      "RaceInfoList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RaceInfoItem"
+            },
+            "title": "Items",
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "RaceInfoList",
+        "type": "object"
+      },
+      "RaceInfoUploaded": {
+        "properties": {
+          "deleted": {
+            "description": "Boats soft deleted because they are missing in the CSV.",
+            "title": "Deleted",
+            "type": "integer"
+          },
+          "uploaded": {
+            "title": "Uploaded",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "uploaded",
+          "deleted"
+        ],
+        "title": "RaceInfoUploaded",
+        "type": "object"
+      },
+      "Station": {
+        "enum": [
+          "start",
+          "3000m",
+          "6000m"
+        ],
+        "title": "Station",
+        "type": "string"
+      },
+      "StatusResponse": {
+        "properties": {
+          "name": {
+            "examples": [
+              "RVEBackend"
+            ],
+            "title": "Name",
+            "type": "string"
+          },
+          "version": {
+            "examples": [
+              "1.0.0"
+            ],
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "version"
+        ],
+        "title": "StatusResponse",
+        "type": "object"
+      },
+      "TimingCreated": {
+        "properties": {
+          "entry_id": {
+            "format": "uuid",
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "created",
+              "duplicate"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "entry_id"
+        ],
+        "title": "TimingCreated",
+        "type": "object"
+      },
+      "TimingInput": {
+        "additionalProperties": false,
+        "description": "Body of `POST /timings/{station}`.",
+        "properties": {
+          "boat_number": {
+            "description": "Boat number, integer, minimum 0.",
+            "minimum": 0.0,
+            "title": "Boat Number",
+            "type": "integer"
+          },
+          "entry_id": {
+            "description": "Client generated UUID (any version). Reuse it when retrying.",
+            "format": "uuid",
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "passed_at": {
+            "description": "Client passing time, ISO 8601 with timezone. Times without timezone are rejected.",
+            "format": "date-time",
+            "title": "Passed At",
+            "type": "string"
+          },
+          "recorded_at": {
+            "description": "Client time of the entry, ISO 8601 with timezone. Times without timezone are rejected.",
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entry_id",
+          "boat_number",
+          "passed_at",
+          "recorded_at"
+        ],
+        "title": "TimingInput",
+        "type": "object"
+      },
+      "TimingItem": {
+        "properties": {
+          "boat_number": {
+            "title": "Boat Number",
+            "type": "integer"
+          },
+          "current": {
+            "description": "True for the latest entry (by recorded_at) of the boat.",
+            "title": "Current",
+            "type": "boolean"
+          },
+          "entry_id": {
+            "format": "uuid",
+            "title": "Entry Id",
+            "type": "string"
+          },
+          "passed_at": {
+            "format": "date-time",
+            "title": "Passed At",
+            "type": "string"
+          },
+          "received_at": {
+            "format": "date-time",
+            "title": "Received At",
+            "type": "string"
+          },
+          "recorded_at": {
+            "format": "date-time",
+            "title": "Recorded At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "boat_number",
+          "entry_id",
+          "passed_at",
+          "recorded_at",
+          "received_at",
+          "current"
+        ],
+        "title": "TimingItem",
+        "type": "object"
+      },
+      "TimingList": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TimingItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "station": {
+            "$ref": "#/components/schemas/Station"
+          }
+        },
+        "required": [
+          "station",
+          "items"
+        ],
+        "title": "TimingList",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "cognitoJwt": {
+        "bearerFormat": "JWT",
+        "description": "Cognito user pool JWT, sent as 'Authorization: Bearer <token>'. It is checked by the API Gateway JWT authorizer. The roles are the Cognito groups in the cognito:groups claim and are checked in the Lambda code.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "description": "Backend for the timing of a rowing regatta. All endpoints need a Cognito JWT.",
+    "title": "RVEBackend API",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/admin/init-database": {
+      "post": {
+        "description": "Deletes all items of the chosen scope: timings (all stations), race_info or all. Roles: Admin.",
+        "operationId": "initDatabase",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InitDatabaseRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InitDatabaseResult"
+                }
+              }
+            },
+            "description": "Items deleted."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input. The message names the first invalid field and what is wrong. Times without timezone, unknown fields and invalid IANA names are rejected."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller's groups do not allow this request."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "Init database",
+        "tags": [
+          "Admin"
+        ]
+      }
+    },
+    "/exports/{station}": {
+      "get": {
+        "description": "Current value per boat of a station. trz (default) is number, TAB, time with CRLF line endings and no header. csv is 'number;time' with a header line. Time is HH:MM:SS in the timezone of the tz parameter (default Europe/Berlin). Boats without an entry are not listed. Roles: Admin, Regattaleitung.",
+        "operationId": "getExport",
+        "parameters": [
+          {
+            "description": "Timing station. start, 3000m or 6000m.",
+            "in": "path",
+            "name": "station",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Station",
+              "description": "Timing station. start, 3000m or 6000m."
+            }
+          },
+          {
+            "description": "trz (text/plain) or csv (text/csv). Default: trz.",
+            "in": "query",
+            "name": "format",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ExportFormat"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "trz (text/plain) or csv (text/csv). Default: trz.",
+              "title": "Format"
+            }
+          },
+          {
+            "description": "IANA timezone name (for example Europe/Berlin or UTC). Every time is converted to this timezone and written as HH:MM:SS. Default: Europe/Berlin. Invalid names return 400.",
+            "in": "query",
+            "name": "tz",
+            "required": false,
+            "schema": {
+              "default": "Europe/Berlin",
+              "description": "IANA timezone name (for example Europe/Berlin or UTC). Every time is converted to this timezone and written as HH:MM:SS. Default: Europe/Berlin. Invalid names return 400.",
+              "title": "Tz",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Export file, sent as attachment <station>.trz or <station>.csv."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input. The message names the first invalid field and what is wrong. Times without timezone, unknown fields and invalid IANA names are rejected."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller's groups do not allow this request."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "Export a station",
+        "tags": [
+          "Exports"
+        ]
+      }
+    },
+    "/me": {
+      "get": {
+        "description": "Returns the user name and groups from the token. Roles: any signed in user.",
+        "operationId": "getMe",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            },
+            "description": "The caller."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "Current user",
+        "tags": [
+          "Session"
+        ]
+      }
+    },
+    "/race-info": {
+      "get": {
+        "description": "Returns the uploaded race info. Roles: Admin, Zeitnahme_Start, Zeitnahme_3000m, Zeitnahme_6000m, Regattaleitung.",
+        "operationId": "getRaceInfo",
+        "parameters": [
+          {
+            "description": "Set to true to include soft deleted boats.",
+            "in": "query",
+            "name": "includeDeleted",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Set to true to include soft deleted boats.",
+              "title": "Includedeleted",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RaceInfoList"
+                }
+              }
+            },
+            "description": "Race info items."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input. The message names the first invalid field and what is wrong. Times without timezone, unknown fields and invalid IANA names are rejected."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller's groups do not allow this request."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "Get the race info",
+        "tags": [
+          "Race info"
+        ]
+      },
+      "put": {
+        "description": "Uploads the race CSV with the header race,number,name,... (comma separated). race and number are integers, minimum 0. Every row is validated first. One invalid row rejects the whole upload with 400 and nothing is written. Boats missing from the upload are soft deleted. Content-Type must be text/csv. Roles: Admin, Regattaleitung.",
+        "operationId": "putRaceInfo",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RaceInfoUploaded"
+                }
+              }
+            },
+            "description": "CSV processed."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input. The message names the first invalid field and what is wrong. Times without timezone, unknown fields and invalid IANA names are rejected."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller's groups do not allow this request."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "Upload the race info",
+        "tags": [
+          "Race info"
+        ]
+      }
+    },
+    "/status": {
+      "get": {
+        "description": "Returns the name and version of the application. Roles: any signed in user.",
+        "operationId": "getStatus",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            },
+            "description": "The application."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "Application status",
+        "tags": [
+          "Session"
+        ]
+      }
+    },
+    "/timings/{station}": {
+      "get": {
+        "description": "Returns the whole partition of a station, all entries with the current one marked. Roles: Admin, Zeitnahme_Start, Zeitnahme_3000m, Zeitnahme_6000m, Regattaleitung (all stations).",
+        "operationId": "getTimings",
+        "parameters": [
+          {
+            "description": "Timing station. start, 3000m or 6000m.",
+            "in": "path",
+            "name": "station",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Station",
+              "description": "Timing station. start, 3000m or 6000m."
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimingList"
+                }
+              }
+            },
+            "description": "All entries."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input. The message names the first invalid field and what is wrong. Times without timezone, unknown fields and invalid IANA names are rejected."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller's groups do not allow this request."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "List timings of a station",
+        "tags": [
+          "Timings"
+        ]
+      },
+      "post": {
+        "description": "Records a passing time at a station. Roles: Admin, or the station's own group (Zeitnahme_Start for start, Zeitnahme_3000m for 3000m, Zeitnahme_6000m for 6000m). Idempotent per entry_id: a repeat returns 200 with status duplicate. Corrections are new entries, the latest recorded_at wins.",
+        "operationId": "postTiming",
+        "parameters": [
+          {
+            "description": "Timing station. start, 3000m or 6000m.",
+            "in": "path",
+            "name": "station",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/Station",
+              "description": "Timing station. start, 3000m or 6000m."
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TimingInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimingCreated"
+                }
+              }
+            },
+            "description": "Entry already exists."
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TimingCreated"
+                }
+              }
+            },
+            "description": "Entry created."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input. The message names the first invalid field and what is wrong. Times without timezone, unknown fields and invalid IANA names are rejected."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller's groups do not allow this request."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "Record a timing",
+        "tags": [
+          "Timings"
+        ]
+      }
+    }
+  },
+  "servers": [
+    {
+      "url": "https://langstrecke-api.mssputnik.click"
+    }
+  ],
+  "tags": [
+    {
+      "description": "Information about the calling user and the application.",
+      "name": "Session"
+    },
+    {
+      "description": "Passing times recorded at the stations.",
+      "name": "Timings"
+    },
+    {
+      "description": "Race list uploaded by the Regattaleitung.",
+      "name": "Race info"
+    },
+    {
+      "description": "Current value per boat as TRZ or CSV.",
+      "name": "Exports"
+    },
+    {
+      "description": "Administrative endpoints.",
+      "name": "Admin"
+    }
+  ]
+}

@@ -17,6 +17,7 @@ from .auth import AuthUnavailable, CognitoAuth
 from .config import (
     Config,
     ConfigError,
+    save_auto_increment,
     save_refresh_token,
     save_show_all_records,
 )
@@ -232,6 +233,14 @@ class App(tk.Tk):
             self._container, text="Record passing time", padding=8
         )
         entry_frame.pack(fill="x", pady=8)
+        # Packed first so it takes the bottom strip, right aligned.
+        self._auto_inc_var = tk.BooleanVar(value=self.config_.auto_increment)
+        ttk.Checkbutton(
+            entry_frame,
+            text="Auto increment",
+            variable=self._auto_inc_var,
+            command=self._toggle_auto_increment,
+        ).pack(side="bottom", anchor="e")
         ttk.Label(entry_frame, text="Boat number").pack(side="left")
         self._boat_var = tk.StringVar()
         # Large number; fill="y" stretches the field to the height of the
@@ -346,7 +355,7 @@ class App(tk.Tk):
         self._pending.append(
             PendingEntry(uuid.uuid4(), int(text), passed_at=now, recorded_at=now)
         )
-        self._boat_var.set(str(int(text) + 1) if self.config_.auto_increment else "")
+        self._boat_var.set(str(int(text) + 1) if self._auto_inc_var.get() else "")
         self._update_pending_label()
         self._send_pending()
 
@@ -433,6 +442,12 @@ class App(tk.Tk):
         if self._tz:
             dt = dt.astimezone(self._tz)
         return dt.strftime("%H:%M:%S")
+
+    def _toggle_auto_increment(self) -> None:
+        try:
+            save_auto_increment(self._auto_inc_var.get())
+        except ConfigError as exc:
+            self._status.set(f"Cannot save the setting: {exc}")
 
     def _toggle_show_all(self) -> None:
         try:

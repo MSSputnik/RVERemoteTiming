@@ -32,7 +32,7 @@ environment variable to use another file.
 Required:
 
 - `client_id`: Cognito app client ID.
-- `region`: AWS region of the Cognito user pool, for example `eu-central-1`.
+- `region`: AWS region of the Cognito user pool, for example `eu-west-1`.
 - `station`: one of `start`, `3000m`, `6000m`.
 - `base_url`: base URL of the API, for example
   `https://langstrecke-api.mssputnik.click`.
@@ -42,7 +42,9 @@ Optional:
 - `username`: pre-fills the username on the sign-in screen.
 - `timezone`: IANA timezone for the displayed times. Default `Europe/Berlin`.
 - `auto_increment`: `true` or `false` (default). When `true`, the boat number
-  is increased by one after each "Record now".
+  is increased by one after each "Record now". It is the start value of the
+  "Auto increment" checkbox. The app writes it back when you toggle the
+  checkbox.
 - `show_all_records`: `true` or `false` (default). State of the "Show all
   records" checkbox. The app writes it back when you toggle the checkbox.
 

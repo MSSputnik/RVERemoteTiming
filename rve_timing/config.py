@@ -116,6 +116,11 @@ def save_refresh_token(token: str | None, path: Path | None = None) -> None:
     _update_config(REFRESH_TOKEN_KEY, xor_encode(token) if token else None, path)
 
 
+def save_auto_increment(value: bool, path: Path | None = None) -> None:
+    """Store the state of the "Auto increment" checkbox."""
+    _update_config("auto_increment", value, path)
+
+
 def save_show_all_records(value: bool, path: Path | None = None) -> None:
     """Store the state of the "Show all records" checkbox."""
     _update_config("show_all_records", value, path)

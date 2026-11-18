@@ -2,6 +2,7 @@
 
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import boto3
@@ -15,6 +16,10 @@ EXPIRY_MARGIN = 60
 
 class AuthError(Exception):
     """Raised when sign in or refresh fails."""
+
+
+class AuthUnavailable(AuthError):
+    """Cognito could not be reached. The session is still valid."""
 
 
 class NewPasswordRequired(AuthError):
@@ -36,8 +41,15 @@ class CognitoAuth:
     audience and the cognito:groups claim).
     """
 
-    def __init__(self, client_id: str, region: str) -> None:
+    def __init__(
+        self,
+        client_id: str,
+        region: str,
+        on_refresh_token: Callable[[str], None] | None = None,
+    ) -> None:
         self._client_id = client_id
+        # Called with the refresh token after every sign in / refresh.
+        self._on_refresh_token = on_refresh_token
         # Public app client calls are unsigned, no AWS credentials are needed.
         self._client = boto3.client(
             "cognito-idp",
@@ -75,6 +87,17 @@ class CognitoAuth:
                 refresh_token=result["RefreshToken"],
                 expires_at=time.time() + result["ExpiresIn"],
             )
+        self._notify(result["RefreshToken"])
+
+    def restore(self, refresh_token: str) -> None:
+        """Sign in with a stored refresh token. Raises AuthError if invalid."""
+        with self._lock:
+            self._tokens = Tokens("", "", refresh_token, 0.0)
+        self.refresh()
+
+    def _notify(self, refresh_token: str) -> None:
+        if self._on_refresh_token:
+            self._on_refresh_token(refresh_token)
 
     def refresh(self) -> None:
         with self._lock:
@@ -87,9 +110,13 @@ class CognitoAuth:
                     AuthFlow="REFRESH_TOKEN_AUTH",
                     AuthParameters={"REFRESH_TOKEN": refresh_token},
                 )
-            except (ClientError, BotoCoreError) as exc:
+            except ClientError as exc:
+                # Refresh token rejected (expired/revoked): session is over.
                 self._tokens = None
                 raise AuthError(_message(exc)) from exc
+            except BotoCoreError as exc:
+                # Connection problem: keep the tokens and let the caller retry.
+                raise AuthUnavailable(_message(exc)) from exc
             result = resp["AuthenticationResult"]
             # A refresh does not return a new refresh token unless rotation is on.
             self._tokens = Tokens(
@@ -98,6 +125,8 @@ class CognitoAuth:
                 refresh_token=result.get("RefreshToken", refresh_token),
                 expires_at=time.time() + result["ExpiresIn"],
             )
+            new_refresh_token = self._tokens.refresh_token
+        self._notify(new_refresh_token)
 
     def get_id_token(self) -> str:
         """Return a valid ID token, refreshing it when it is about to expire."""

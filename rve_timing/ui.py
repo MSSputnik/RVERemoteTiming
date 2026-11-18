@@ -13,8 +13,8 @@ from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .api import ApiClient, ApiError
-from .auth import CognitoAuth
-from .config import Config
+from .auth import AuthUnavailable, CognitoAuth
+from .config import Config, ConfigError, save_refresh_token
 from .version import APP_NAME, APP_VERSION
 
 RETRY_INTERVAL_MS = 10_000
@@ -41,7 +41,10 @@ class App(tk.Tk):
             self._tz = ZoneInfo(config.timezone)
         except ZoneInfoNotFoundError:
             self._tz = None
-        self._auth = CognitoAuth(config.client_id, config.region)
+        self._remember = False
+        self._auth = CognitoAuth(
+            config.client_id, config.region, self._store_refresh_token
+        )
         self._api = ApiClient(config.base_url, self._auth)
         self._pending: deque[PendingEntry] = deque()
         self._results: queue.Queue[Callable[[], None]] = queue.Queue()
@@ -57,6 +60,8 @@ class App(tk.Tk):
         self.after(100, self._poll_results)
         self.after(RETRY_INTERVAL_MS, self._retry_timer)
         self._show_login()
+        if config.refresh_token:
+            self._auto_login(config.refresh_token)
 
     # ---- helpers -------------------------------------------------------
 
@@ -89,6 +94,23 @@ class App(tk.Tk):
     def _now(self) -> datetime:
         return datetime.now(self._tz) if self._tz else datetime.now().astimezone()
 
+    def _store_refresh_token(self, token: str) -> None:
+        """Auth callback (may run in a worker thread)."""
+        if not self._remember:
+            return
+        try:
+            save_refresh_token(token)
+        except ConfigError as exc:
+            msg = str(exc)
+            self._results.put(lambda: self._status.set(f"Cannot remember login: {msg}"))
+
+    def _forget_refresh_token(self) -> None:
+        self._remember = False
+        try:
+            save_refresh_token(None)
+        except ConfigError as exc:
+            self._status.set(f"Cannot remove stored login: {exc}")
+
     def _clear(self) -> None:
         for child in self._container.winfo_children():
             child.destroy()
@@ -114,8 +136,12 @@ class App(tk.Tk):
         pw = ttk.Entry(frame, textvariable=self._pw_var, show="*", width=30)
         user.grid(row=1, column=1, pady=4)
         pw.grid(row=2, column=1, pady=4)
+        self._remember_var = tk.BooleanVar(value=bool(self.config_.refresh_token))
+        ttk.Checkbutton(frame, text="Remember login", variable=self._remember_var).grid(
+            row=3, column=1, sticky="w"
+        )
         self._login_btn = ttk.Button(frame, text="Sign in", command=self._do_login)
-        self._login_btn.grid(row=3, column=0, columnspan=2, pady=10)
+        self._login_btn.grid(row=4, column=0, columnspan=2, pady=10)
         for w in (user, pw):
             w.bind("<Return>", lambda _e: self._do_login())
         (pw if self._user_var.get() else user).focus_set()
@@ -127,12 +153,39 @@ class App(tk.Tk):
             return
         self._login_btn.state(["disabled"])
         self._status.set("Signing in ...")
+        self._remember = self._remember_var.get()
+        if not self._remember:
+            self._forget_refresh_token()
 
         def work() -> dict[str, Any]:
             self._auth.sign_in(username, password)
             return self._api.me()
 
         self._run_async(work, self._login_ok, self._login_failed)
+
+    def _auto_login(self, refresh_token: str) -> None:
+        """Sign in with the stored refresh token, without credentials."""
+        self._login_btn.state(["disabled"])
+        self._status.set("Signing in with stored login ...")
+        self._remember = True
+
+        def work() -> dict[str, Any]:
+            self._auth.restore(refresh_token)
+            return self._api.me()
+
+        self._run_async(work, self._login_ok, self._auto_login_failed)
+
+    def _auto_login_failed(self, exc: Exception) -> None:
+        self._login_btn.state(["!disabled"])
+        if isinstance(exc, AuthUnavailable):
+            # Token may still be valid: keep it for the next start.
+            self._auth.sign_out()
+            self._status.set(f"Cannot reach the login service: {exc}")
+            return
+        self._forget_refresh_token()
+        self._remember_var.set(False)
+        self._auth.sign_out()
+        self._status.set(f"Stored login is no longer valid, please sign in: {exc}")
 
     def _login_ok(self, me: dict[str, Any]) -> None:
         self._pw_var.set("")
@@ -145,6 +198,7 @@ class App(tk.Tk):
         self._status.set(f"Sign in failed: {exc}")
 
     def _sign_out(self) -> None:
+        self._forget_refresh_token()
         self._auth.sign_out()
         self._status.set("Signed out.")
         self._show_login()
@@ -270,7 +324,7 @@ class App(tk.Tk):
             self._send_pending()
             return
         self._status.set(f"Boat {entry.boat_number} not sent, will retry: {exc}")
-        if isinstance(exc, ApiError) and exc.status == 401:
+        if isinstance(exc, ApiError) and exc.status == 401 and not self._auth.signed_in:
             self._sign_out_expired()
 
     def _retry_timer(self) -> None:
@@ -278,6 +332,7 @@ class App(tk.Tk):
         self.after(RETRY_INTERVAL_MS, self._retry_timer)
 
     def _sign_out_expired(self) -> None:
+        self._forget_refresh_token()
         self._auth.sign_out()
         self._show_login()
         self._status.set(

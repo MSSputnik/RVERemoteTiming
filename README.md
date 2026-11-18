@@ -61,6 +61,18 @@ kept and retried every 10 seconds. The same `entry_id` is reused, so the API
 does not store an entry twice. Entries rejected by the server with a 4xx error
 are dropped and shown in an error dialog.
 
+## Remember login
+
+Tick "Remember login" on the sign-in screen to skip the credentials next
+time. The Cognito refresh token is then saved in `config.json` as
+`refresh_token`, obfuscated with the WebSphere style `{xor}` encoding (XOR plus
+Base64). This is not encryption: anyone who can read `config.json` can recover
+the token and sign in as the user. Treat the file like a password.
+
+On start the app uses the stored token to get new tokens. If Cognito rejects
+it (expired or revoked), the token is removed and the sign-in screen is shown.
+If Cognito cannot be reached, the token is kept. "Sign out" removes it.
+
 ## Authentication
 
 The app signs in with `initiate_auth` (`USER_PASSWORD_AUTH`) and refreshes the

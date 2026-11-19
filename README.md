@@ -40,11 +40,16 @@ Required:
 Optional:
 
 - `username`: pre-fills the username on the sign-in screen.
-- `timezone`: IANA timezone for the displayed times. Default `Europe/Berlin`.
+- `timezone`: IANA timezone, default `Europe/Berlin`. The planned start of the
+  race info is taken as a time in this timezone. The passing and recording
+  times from the API are converted to it for display. An unknown name stops
+  the app at start.
 - `auto_increment`: `true` or `false` (default). When `true`, the boat number
   is increased by one after each "Record now". It is the start value of the
   "Auto increment" checkbox. The app writes it back when you toggle the
   checkbox.
+- `race_info_interval_minutes`: how often the race info is pulled
+  automatically. Default `5`, `0` turns the automatic pull off.
 - `show_all_records`: `true` or `false` (default). State of the "Show all
   records" checkbox. The app writes it back when you toggle the checkbox.
 
@@ -61,11 +66,24 @@ uv run python -m rve_timing
    The current time is sent as the passing time to the configured station.
    The arrow buttons next to the field, or the Up and Down keys, change the
    boat number by one without recording it.
-3. The table shows the current entry of each boat. Boats whose current entry
-   is a delete marker are left out. Tick "Show all records" to see every entry,
-   including corrections and delete markers (column "Deleted", greyed out).
-   "Current" marks the latest entry of each boat. The checkbox state is saved
-   in `config.json`. Click "Refresh" to reload the list.
+3. The table lists every boat of the race info, ordered by planned start, with
+   the club, the distance and the current passing and recording time. Boats
+   without a timing (or whose current entry is a delete marker) have empty
+   time columns, so a boat that does not show up keeps its planned slot.
+   Boats that have a timing but are not in the race info are highlighted
+   in yellow, marked "(not in race info)" and placed by their passing time,
+   as if it were the planned start (shown as `~HH:MM:SS`). Without any race
+   info the list is a plain list of timings, newest first.
+   - The list scrolls so that the boat you just recorded, edited or deleted
+     is visible with the 5 boats before it. After a start or "Refresh" it
+     scrolls to the first boat whose planned start is not yet over.
+   - The race info is pulled at start, on "Refresh" and every
+     `race_info_interval_minutes` minutes. The scroll position stays as it is
+     on the automatic pull.
+   - Tick "Show all records" to see every entry instead, including
+     corrections and delete markers (greyed out). The columns change to Boat,
+     Passed at, Recorded at, Current and Deleted, and the race info is not
+     shown. The checkbox state is saved in `config.json`.
 4. To correct a time, select an entry and click "Edit time ..." (or double
    click it). Enter the new time as HH:MM:SS. The date stays the same. This
    sends a new entry, the latest one wins.

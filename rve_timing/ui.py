@@ -3,14 +3,16 @@
 import queue
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, time
+from time import monotonic
 from tkinter import messagebox, ttk
 from typing import Any
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from zoneinfo import ZoneInfo
 
 from .api import ApiClient, ApiError
 from .auth import AuthUnavailable, CognitoAuth
@@ -37,17 +39,49 @@ class PendingEntry:
     deleted: bool = False
 
 
+ALL_COLUMNS = ("boat", "passed", "recorded", "current", "deleted")
+NORMAL_COLUMNS = ("boat", "planned", "club", "distance", "passed", "recorded")
+ROWS_BEFORE_FOCUS = 5  # rows shown above the boat in focus
+
+# Activity indicator (lightning bolt in the bottom right corner).
+BOLT_POINTS = (13, 1, 4, 13, 10, 13, 8, 21, 18, 8, 12, 8)
+BOLT_ONLINE = "#f5c400"  # yellow: online
+BOLT_BUSY = "#b0b0b0"  # gray: dark phase of the flicker
+BOLT_OUTLINE = "#808080"
+BLINK_INTERVAL_MS = 150
+MIN_FLASH_SECONDS = 0.5  # short requests would otherwise not be visible
+
+
+@dataclass
+class Row:
+    """One line of the timing list."""
+
+    iid: str
+    boat: int
+    values: tuple[Any, ...]  # one value per column of the tree
+    planned: time | None = None  # planned start; stand-in time for unknown boats
+    tags: tuple[str, ...] = ()
+    unknown: bool = False  # timing of a boat that is not in the race info
+
+
+def _parse_planned(value: Any) -> time | None:
+    """Parse the planned start (time of day, e.g. 11:02:00) of the race info."""
+    try:
+        return time.fromisoformat(str(value)).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
 class App(tk.Tk):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.config_ = config
         self.title(f"{APP_NAME} {APP_VERSION} - {config.station}")
-        self.minsize(520, 420)
+        self._setup_list_style()
+        self.minsize(int(760 * self._font_scale), 420)
 
-        try:
-            self._tz = ZoneInfo(config.timezone)
-        except ZoneInfoNotFoundError:
-            self._tz = None
+        # Validated when the configuration is loaded.
+        self._tz = ZoneInfo(config.timezone)
         self._remember = False
         self._main_active = False
         self.bind("<Up>", self._key_up)
@@ -61,16 +95,40 @@ class App(tk.Tk):
         self._pending: deque[PendingEntry] = deque()
         self._results: queue.Queue[Callable[[], None]] = queue.Queue()
         self._sending = False
+        self._race_info: list[dict[str, Any]] = []
+        self._focus_boat: int | None = None  # boat to scroll to on next render
+        self._fresh_view = True  # scroll to the boats due now on next render
+
+        self._activity = 0  # requests in flight (Tk thread only)
+        self._flash_until = 0.0
+        self._blink_on = True
 
         self._status = tk.StringVar(value="Please sign in.")
-        ttk.Label(self, textvariable=self._status, relief="sunken", anchor="w").pack(
-            side="bottom", fill="x"
+        bottom = ttk.Frame(self)
+        bottom.pack(side="bottom", fill="x")
+        # The indicator takes the right end, the status line gets the rest.
+        self._bolt_canvas = tk.Canvas(
+            bottom,
+            width=24,
+            height=24,
+            highlightthickness=0,
+            background=ttk.Style(self).lookup("TFrame", "background") or "#f0f0f0",
+        )
+        self._bolt_canvas.pack(side="right", padx=4)
+        self._bolt = self._bolt_canvas.create_polygon(
+            *BOLT_POINTS, fill="", outline=BOLT_OUTLINE, width=1
+        )
+        ttk.Label(bottom, textvariable=self._status, relief="sunken", anchor="w").pack(
+            side="left", fill="x", expand=True
         )
         self._container = ttk.Frame(self, padding=10)
         self._container.pack(fill="both", expand=True)
 
         self.after(100, self._poll_results)
+        self.after(BLINK_INTERVAL_MS, self._blink)
         self.after(RETRY_INTERVAL_MS, self._retry_timer)
+        if config.race_info_interval_minutes > 0:
+            self.after(self._race_interval_ms(), self._race_timer)
         self._show_login()
         if config.refresh_token:
             self._auto_login(config.refresh_token)
@@ -84,16 +142,34 @@ class App(tk.Tk):
         on_error: Callable[[Exception], None],
     ) -> None:
         """Run work in a thread and deliver the result in the Tk thread."""
+        self._activity += 1
+        self._flash_until = monotonic() + MIN_FLASH_SECONDS
 
         def target() -> None:
             try:
                 result = work()
             except Exception as exc:  # noqa: BLE001 - reported to the user
-                self._results.put(lambda exc=exc: on_error(exc))
+                self._results.put(lambda exc=exc: self._finish(lambda: on_error(exc)))
             else:
-                self._results.put(lambda: on_done(result))
+                self._results.put(lambda: self._finish(lambda: on_done(result)))
 
         threading.Thread(target=target, daemon=True).start()
+
+    def _finish(self, callback: Callable[[], None]) -> None:
+        self._activity = max(0, self._activity - 1)
+        callback()
+
+    def _blink(self) -> None:
+        """Flicker the bolt while requests are running, solid otherwise."""
+        active = self._activity > 0 or monotonic() < self._flash_until
+        self._blink_on = not self._blink_on if active else True
+        if self._auth.signed_in:
+            fill = BOLT_ONLINE if self._blink_on else BOLT_BUSY
+        else:
+            # Not signed in: outline only, filled gray while a request runs.
+            fill = BOLT_BUSY if active and self._blink_on else ""
+        self._bolt_canvas.itemconfigure(self._bolt, fill=fill)
+        self.after(BLINK_INTERVAL_MS, self._blink)
 
     def _poll_results(self) -> None:
         try:
@@ -285,7 +361,9 @@ class App(tk.Tk):
             variable=self._show_all_var,
             command=self._toggle_show_all,
         ).pack(side="left", padx=12)
-        ttk.Button(bar, text="Refresh", command=self._refresh).pack(side="right")
+        ttk.Button(bar, text="Refresh", command=self._refresh_clicked).pack(
+            side="right"
+        )
         ttk.Button(bar, text="Delete", command=self._delete_selected).pack(
             side="right", padx=4
         )
@@ -293,30 +371,50 @@ class App(tk.Tk):
             side="right"
         )
 
-        cols = ("boat", "passed", "recorded", "current", "deleted")
+        # All columns exist; render switches the visible ones per view mode.
+        cols = (
+            "boat",
+            "planned",
+            "club",
+            "distance",
+            "passed",
+            "recorded",
+            "current",
+            "deleted",
+        )
         self._tree = ttk.Treeview(
-            self._container, columns=cols, show="headings", height=12
+            self._container, columns=cols, show="headings", height=16
         )
         for col, title, width in (
             ("boat", "Boat", 70),
-            ("passed", "Passed at", 160),
-            ("recorded", "Recorded at", 160),
+            ("planned", "Planned start", 100),
+            ("club", "Club", 180),
+            ("distance", "Distance", 80),
+            ("passed", "Passed at", 110),
+            ("recorded", "Recorded at", 110),
             ("current", "Current", 70),
             ("deleted", "Deleted", 70),
         ):
             self._tree.heading(col, text=title)
-            self._tree.column(col, width=width, anchor="center")
+            self._tree.column(col, width=int(width * self._font_scale), anchor="center")
         scroll = ttk.Scrollbar(self._container, command=self._tree.yview)
         self._tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self._tree.pack(fill="both", expand=True, pady=(4, 0))
         self._tree.tag_configure("deleted", foreground="#888")
+        # Alternating row colors; boats missing in the race info are highlighted.
+        self._tree.tag_configure("odd", background="#ffffff")
+        self._tree.tag_configure("even", background="#eeeeee")
+        self._tree.tag_configure("odd_unknown", background="#fff4d6")
+        self._tree.tag_configure("even_unknown", background="#ffe9b3")
         self._tree.bind("<Delete>", lambda _e: self._delete_selected())
         self._tree.bind("<Double-1>", lambda _e: self._edit_selected())
         self._items: dict[str, dict[str, Any]] = {}
         self._all_items: list[dict[str, Any]] = []
 
         self._update_pending_label()
+        self._fresh_view = True
+        self._refresh_race_info()
         self._refresh()
 
     def _key_up(self, _event: tk.Event) -> None:
@@ -352,6 +450,7 @@ class App(tk.Tk):
             self._status.set("Boat number must be an integer >= 0.")
             return
         now = self._now()
+        self._focus_boat = int(text)
         self._pending.append(
             PendingEntry(uuid.uuid4(), int(text), passed_at=now, recorded_at=now)
         )
@@ -413,6 +512,31 @@ class App(tk.Tk):
         if isinstance(exc, ApiError) and exc.status == 401 and not self._auth.signed_in:
             self._sign_out_expired()
 
+    def _setup_list_style(self) -> None:
+        """Make the font of the timing list 2 pt larger than the default."""
+        base = tkfont.nametofont("TkDefaultFont")
+        size = int(base.cget("size"))
+        # A negative size is in pixels: grow it the other way.
+        new_size = size + 2 if size > 0 else size - 2
+        self._list_font = base.copy()  # keep a reference, Tk drops unused fonts
+        self._list_font.configure(size=new_size)
+        self._font_scale = abs(new_size) / abs(size)
+        style = ttk.Style(self)
+        style.configure(
+            "Treeview",
+            font=self._list_font,
+            rowheight=self._list_font.metrics("linespace") + 4,
+        )
+        style.configure("Treeview.Heading", font=self._list_font)
+
+    def _race_interval_ms(self) -> int:
+        return self.config_.race_info_interval_minutes * 60_000
+
+    def _race_timer(self) -> None:
+        if self._main_active:
+            self._refresh_race_info()
+        self.after(self._race_interval_ms(), self._race_timer)
+
     def _retry_timer(self) -> None:
         self._send_pending()
         self.after(RETRY_INTERVAL_MS, self._retry_timer)
@@ -454,52 +578,215 @@ class App(tk.Tk):
             save_show_all_records(self._show_all_var.get())
         except ConfigError as exc:
             self._status.set(f"Cannot save the setting: {exc}")
+        self._fresh_view = True
         self._render_timings()
+        self._fresh_view = False
 
     def _show_timings(self, items: list[dict[str, Any]]) -> None:
         self._all_items = items
         self._render_timings()
 
-    def _render_timings(self) -> None:
-        if not self._tree.winfo_exists():
+    def _refresh_clicked(self) -> None:
+        """Refresh button: reload all data and jump to the boats due now."""
+        self._fresh_view = True
+        self._focus_boat = None
+        self._refresh_race_info()
+        self._refresh()
+
+    def _refresh_race_info(self) -> None:
+        if not self._auth.signed_in:
             return
-        items = self._all_items
-        if not self._show_all_var.get():
-            # Only the current entry of each boat; boats whose current entry
-            # is a delete marker are left out.
-            items = [i for i in items if i["current"] and not i.get("deleted")]
-        selected = self._tree.selection()
-        self._tree.delete(*self._tree.get_children())
-        self._items = {}
-        for item in sorted(items, key=lambda i: i["recorded_at"], reverse=True):
+        self._run_async(
+            self._api.list_race_info, self._race_info_loaded, self._race_info_failed
+        )
+
+    def _race_info_loaded(self, items: list[dict[str, Any]]) -> None:
+        self._race_info = items
+        boats = sum(1 for r in items if not r.get("deleted"))
+        self._status.set(
+            f"Race info updated at {self._now().strftime('%H:%M:%S')}: {boats} boats."
+        )
+        self._render_timings()
+        self._fresh_view = False
+
+    def _race_info_failed(self, exc: Exception) -> None:
+        self._status.set(f"Race info failed: {exc}")
+        self._render_timings()
+        self._fresh_view = False
+
+    def _rows_all(self) -> list[Row]:
+        """History view: every entry, newest first, without race info."""
+        rows = []
+        for item in sorted(
+            self._all_items, key=lambda i: i["recorded_at"], reverse=True
+        ):
             deleted = bool(item.get("deleted"))
             passed = item.get("passed_at")
             # entry_id is only unique per boat, so the boat is part of the key.
             iid = f"{item['boat_number']}:{item['entry_id']}"
             self._items[iid] = item
-            self._tree.insert(
+            values = (
+                item["boat_number"],
                 "",
-                "end",
-                iid=iid,
-                values=(
-                    item["boat_number"],
-                    self._fmt(passed) if passed else "-",
-                    self._fmt(item["recorded_at"]),
-                    "yes" if item["current"] else "",
-                    "yes" if deleted else "",
-                ),
-                tags=("deleted",) if deleted else (),
+                "",
+                "",
+                self._fmt(passed) if passed else "-",
+                self._fmt(item["recorded_at"]),
+                "yes" if item["current"] else "",
+                "yes" if deleted else "",
             )
-        keep = [i for i in selected if i in self._items]
+            rows.append(
+                Row(
+                    iid,
+                    item["boat_number"],
+                    values,
+                    None,
+                    ("deleted",) if deleted else (),
+                )
+            )
+        return rows
+
+    def _rows_current(self) -> list[Row]:
+        """Race info joined with the current timing of each boat."""
+        current = {
+            i["boat_number"]: i
+            for i in self._all_items
+            if i["current"] and not i.get("deleted")
+        }
+        races = sorted(
+            (r for r in self._race_info if not r.get("deleted")),
+            key=lambda r: (
+                _parse_planned(r.get("planned_start")) or time.max,
+                r["boat_number"],
+            ),
+        )
+        rows = []
+        used: set[int] = set()
+        for race in races:
+            boat = race["boat_number"]
+            item = current.get(boat)
+            planned = _parse_planned(race.get("planned_start"))
+            if item:
+                used.add(boat)
+                iid = f"{race['race_number']}:{boat}:{item['entry_id']}"
+                self._items[iid] = item
+            else:
+                iid = f"race:{race['race_number']}:{boat}"
+            rows.append(
+                Row(iid, boat, self._current_values(boat, race, item, planned), planned)
+            )
+        extras = [i for b, i in current.items() if b not in used]
+        if not races:
+            # No race info (not loaded yet or failed): plain list, newest first.
+            extras.sort(key=lambda i: i["recorded_at"], reverse=True)
+            for item in extras:
+                boat = item["boat_number"]
+                iid = f"{boat}:{item['entry_id']}"
+                self._items[iid] = item
+                rows.append(
+                    Row(iid, boat, self._current_values(boat, None, item, None))
+                )
+            return rows
+        # Boats that are not in the race info are slotted in by their passing
+        # time, as if it were their planned start. Boats that did not show up
+        # keep their planned slot with empty time columns.
+        for item in extras:
+            boat = item["boat_number"]
+            iid = f"{boat}:{item['entry_id']}"
+            self._items[iid] = item
+            stand_in = self._passed_time(item)
+            values = list(self._current_values(boat, None, item, None))
+            values[1] = f"~{stand_in.strftime('%H:%M:%S')}" if stand_in else ""
+            values[2] = "(not in race info)"
+            rows.append(Row(iid, boat, tuple(values), stand_in, unknown=True))
+        rows.sort(key=lambda r: (r.planned or time.max, r.boat))
+        return rows
+
+    def _passed_time(self, item: dict[str, Any]) -> time | None:
+        """Time of day of the passing time in the configured timezone."""
+        try:
+            return datetime.fromisoformat(item["passed_at"]).astimezone(self._tz).time()
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _current_values(
+        self,
+        boat: int,
+        race: dict[str, Any] | None,
+        item: dict[str, Any] | None,
+        planned: time | None,
+    ) -> tuple[Any, ...]:
+        passed = item.get("passed_at") if item else None
+        return (
+            boat,
+            planned.strftime("%H:%M:%S") if planned else "",
+            race.get("club", "") if race else "",
+            race.get("distance", "") if race else "",
+            (self._fmt(passed) if passed else "-") if item else "",
+            self._fmt(item["recorded_at"]) if item else "",
+            "",
+            "",
+        )
+
+    def _render_timings(self) -> None:
+        if not self._tree.winfo_exists():
+            return
+        show_all = self._show_all_var.get()
+        top = self._tree.yview()[0]
+        selected = self._tree.selection()
+        self._tree.delete(*self._tree.get_children())
+        self._items = {}
+        self._tree.configure(displaycolumns=ALL_COLUMNS if show_all else NORMAL_COLUMNS)
+        rows = self._rows_all() if show_all else self._rows_current()
+        shown = []
+        for row in rows:
+            if self._tree.exists(row.iid):  # never fail on a duplicate key
+                continue
+            stripe = ("even" if len(shown) % 2 else "odd") + (
+                "_unknown" if row.unknown else ""
+            )
+            self._tree.insert(
+                "", "end", iid=row.iid, values=row.values, tags=(*row.tags, stripe)
+            )
+            shown.append(row)
+        keep = [i for i in selected if self._tree.exists(i)]
         if keep:
             self._tree.selection_set(keep)
+        if self._focus_boat is not None or self._fresh_view:
+            self._scroll_to_focus(shown, show_all)
+            self._focus_boat = None
+        else:
+            self._tree.yview_moveto(top)
+
+    def _scroll_to_focus(self, rows: list[Row], show_all: bool) -> None:
+        """Scroll so that the focus row has a few rows above it."""
+        if not rows:
+            return
+        idx = 0 if show_all else self._focus_index(rows)
+        self._tree.yview_moveto(max(0, idx - ROWS_BEFORE_FOCUS) / len(rows))
+
+    def _focus_index(self, rows: list[Row]) -> int:
+        """Row of the boat just handled, else the first boat due from now on."""
+        if self._focus_boat is not None:
+            for n, row in enumerate(rows):
+                if row.boat == self._focus_boat:
+                    return n
+        now = self._now().time()
+        planned = [(n, r.planned) for n, r in enumerate(rows) if r.planned]
+        for n, start in planned:
+            if start >= now:
+                return n
+        return planned[-1][0] if planned else 0
 
     def _selected_item(self) -> dict[str, Any] | None:
         sel = self._tree.selection()
         if not sel:
             self._status.set("Select a timing in the list first.")
             return None
-        return self._items.get(sel[0])
+        item = self._items.get(sel[0])
+        if item is None:
+            self._status.set("No timing recorded for this boat.")
+        return item
 
     def _delete_selected(self) -> None:
         item = self._selected_item()
@@ -513,6 +800,7 @@ class App(tk.Tk):
             "Delete timing", f"Mark boat {boat} as deleted?", parent=self
         ):
             return
+        self._focus_boat = boat
         self._pending.append(
             PendingEntry(
                 uuid.uuid4(),
@@ -543,6 +831,7 @@ class App(tk.Tk):
         if new is None or new == old:
             return
         # A correction is a new entry; the latest recorded_at wins.
+        self._focus_boat = item["boat_number"]
         self._pending.append(
             PendingEntry(
                 uuid.uuid4(),

@@ -92,19 +92,32 @@
         "type": "object"
       },
       "RaceInfoItem": {
-        "additionalProperties": true,
-        "description": "A stored race info row. Attributes of further CSV columns are included as text.",
+        "description": "A stored race info row.",
         "properties": {
           "boat_number": {
             "title": "Boat Number",
             "type": "integer"
           },
+          "club": {
+            "title": "Club",
+            "type": "string"
+          },
           "deleted": {
             "title": "Deleted",
             "type": "boolean"
           },
-          "name": {
-            "title": "Name",
+          "distance": {
+            "title": "Distance",
+            "type": "string"
+          },
+          "planned_start": {
+            "description": "Planned start, time of day, for example 11:02:00.",
+            "format": "time",
+            "title": "Planned Start",
+            "type": "string"
+          },
+          "race_name": {
+            "title": "Race Name",
             "type": "string"
           },
           "race_number": {
@@ -119,8 +132,11 @@
         },
         "required": [
           "boat_number",
+          "planned_start",
+          "club",
           "race_number",
-          "name",
+          "race_name",
+          "distance",
           "deleted",
           "updated_at"
         ],
@@ -182,7 +198,7 @@
           },
           "version": {
             "examples": [
-              "1.1.0"
+              "2.0.0"
             ],
             "title": "Version",
             "type": "string"
@@ -692,7 +708,7 @@
         ]
       },
       "put": {
-        "description": "Uploads the race CSV with the header race,number,name,... (comma separated). race and number are integers, minimum 0. Every row is validated first. One invalid row rejects the whole upload with 400 and nothing is written. Boats missing from the upload are soft deleted. Content-Type must be text/csv. Roles: Admin, Regattaleitung.",
+        "description": "Uploads the race CSV (semicolon separated) with the header boat_number;planned_start;club;race_number;race_name;distance. Column order does not matter, further columns are ignored. boat_number and race_number are integers, minimum 0, planned_start is a time of day such as 11:02:00. Every row is validated first. One invalid row rejects the whole upload with 400 and nothing is written. Boats missing from the upload are soft deleted. Content-Type must be text/csv. Roles: Admin, Regattaleitung.",
         "operationId": "putRaceInfo",
         "responses": {
           "200": {

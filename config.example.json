@@ -6,5 +6,6 @@
   "username": "",
   "timezone": "Europe/Berlin",
   "auto_increment": false,
-  "show_all_records": false
+  "show_all_records": false,
+  "race_info_interval_minutes": 10
 }

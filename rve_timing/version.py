@@ -4,4 +4,4 @@ Keep APP_VERSION in sync with `version` in pyproject.toml.
 """
 
 APP_NAME = "RVE Remote Timing"
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.6.3"

@@ -5,6 +5,7 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 STATIONS = ("start", "3000m", "6000m")
 DEFAULT_CONFIG_PATH = Path("config.json")
@@ -46,6 +47,7 @@ class Config:
     timezone: str = "Europe/Berlin"
     auto_increment: bool = False
     show_all_records: bool = False
+    race_info_interval_minutes: int = 5  # 0 disables the automatic pull
     refresh_token: str = ""  # decoded; empty when login is not remembered
 
 
@@ -80,6 +82,12 @@ def load_config(path: Path | None = None) -> Config:
             f"station must be one of {', '.join(STATIONS)}, got '{station}'"
         )
 
+    timezone = str(raw.get("timezone", "Europe/Berlin"))
+    try:
+        ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        raise ConfigError(f"Unknown timezone '{timezone}'.") from None
+
     auto_increment = raw.get("auto_increment", False)
     if not isinstance(auto_increment, bool):
         raise ConfigError("auto_increment must be true or false.")
@@ -87,6 +95,14 @@ def load_config(path: Path | None = None) -> Config:
     show_all_records = raw.get("show_all_records", False)
     if not isinstance(show_all_records, bool):
         raise ConfigError("show_all_records must be true or false.")
+
+    race_info_interval_minutes = raw.get("race_info_interval_minutes", 5)
+    if (
+        isinstance(race_info_interval_minutes, bool)
+        or not isinstance(race_info_interval_minutes, int)
+        or race_info_interval_minutes < 0
+    ):
+        raise ConfigError("race_info_interval_minutes must be an integer >= 0.")
 
     refresh_token = ""
     if raw.get(REFRESH_TOKEN_KEY):
@@ -101,9 +117,10 @@ def load_config(path: Path | None = None) -> Config:
         base_url=str(raw["base_url"]).rstrip("/"),
         region=str(raw["region"]),
         username=str(raw.get("username", "")),
-        timezone=str(raw.get("timezone", "Europe/Berlin")),
+        timezone=timezone,
         auto_increment=auto_increment,
         show_all_records=show_all_records,
+        race_info_interval_minutes=race_info_interval_minutes,
         refresh_token=refresh_token,
     )
 

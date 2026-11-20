@@ -10,6 +10,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 STATIONS = ("start", "3000m", "6000m")
 # The station whose passing times show which boats to expect.
 UPSTREAM_STATION = {"3000m": "start", "6000m": "3000m"}
+# Not a station: the overview of the Regattaleitung (race info and all stations).
+OVERVIEW_STATION = "regattaleitung"
 DEFAULT_CONFIG_PATH = Path("config.json")
 CONFIG_ENV_VAR = "RVE_TIMING_CONFIG"
 
@@ -77,9 +79,10 @@ def load_config(path: Path | None = None) -> Config:
         raise ConfigError("Missing configuration value: station")
 
     station = str(raw["station"])
-    if station not in STATIONS:
+    if station not in (*STATIONS, OVERVIEW_STATION):
         raise ConfigError(
-            f"station must be one of {', '.join(STATIONS)}, got '{station}'"
+            f"station must be one of {', '.join((*STATIONS, OVERVIEW_STATION))}, "
+            f"got '{station}'"
         )
 
     timezone = str(raw.get("timezone", "Europe/Berlin"))

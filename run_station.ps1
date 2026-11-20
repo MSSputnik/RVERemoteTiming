@@ -2,10 +2,10 @@
 # If that file does not exist yet, it is created from config.example.json with
 # the station set and the username cleared. Everything else is copied as is.
 #
-# Usage: .\run_station.ps1 -Station start|3000m|6000m [-PrepareOnly]
+# Usage: .\run_station.ps1 -Station start|3000m|6000m|regattaleitung [-PrepareOnly]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("start", "3000m", "6000m")]
+    [ValidateSet("start", "3000m", "6000m", "regattaleitung")]
     [string]$Station,
 
     # Only create the config file, do not start the app.

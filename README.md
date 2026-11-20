@@ -31,7 +31,8 @@ environment variable to use another file.
 
 Required:
 
-- `station`: one of `start`, `3000m`, `6000m`.
+- `station`: one of `start`, `3000m`, `6000m`, or `regattaleitung` for the
+  overview of the Regattaleitung (see below).
 
 Set in the app with the "Set Login Parameters ..." button on the sign-in
 screen (see below). You can also write them into the file:
@@ -66,9 +67,10 @@ Optional:
 uv run python -m rve_timing
 ```
 
-For one config file per station, use `run_start.ps1`, `run_3000m.ps1` or
-`run_6000m.ps1`. They start the app with `config_start.json`,
-`config_3000m.json` or `config_6000m.json`. If that file does not exist yet,
+For one config file per station, use `run_start.ps1`, `run_3000m.ps1`,
+`run_6000m.ps1` or `run_regattaleitung.ps1`. They start the app with
+`config_start.json`, `config_3000m.json`, `config_6000m.json` or
+`config_regattaleitung.json`. If that file does not exist yet,
 `run_station.ps1` creates it from `config.example.json` with the station set
 and the username cleared, then you fill in the rest.
 
@@ -126,6 +128,24 @@ Entries that cannot be sent, for example because of a network problem, are
 kept and retried every 10 seconds. The same `entry_id` is reused, so the API
 does not store an entry twice. Entries rejected by the server with a 4xx error
 are dropped and shown in an error dialog.
+
+## Regattaleitung
+
+With `"station": "regattaleitung"` the app shows an overview instead of a
+station. There is no record box, and times cannot be edited, deleted or
+restored. The window opens large and the list uses a larger font.
+
+The list shows every boat of the race info, ordered by planned start, with
+the columns Race, Boat, Planned start, Club, Distance and the current passing
+time at Start, 3000m and 6000m. An empty cell means the boat has not passed
+that station yet, `(deleted)` means its current entry there is a delete
+marker. Boats that passed 6000m are shown in grey. Boats with a timing that
+are not in the race info are highlighted in yellow and placed by their
+passing time at the start. The list scrolls to the boats due now.
+
+The race info and the timings of all three stations are pulled at sign-in, on
+"Refresh" and every `race_info_interval_minutes` minutes. The user needs the
+group `Regattaleitung` (or `Admin`), which may read all of them.
 
 ## Remember login
 

@@ -19,6 +19,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from .api import ApiClient, ApiError
 from .auth import AuthUnavailable, CognitoAuth
 from .config import (
+    OVERVIEW_STATION,
+    STATIONS,
     UPSTREAM_STATION,
     Config,
     ConfigError,
@@ -49,6 +51,33 @@ ALL_COLUMNS = ("boat", "passed", "recorded", "current", "deleted")
 NORMAL_COLUMNS = ("boat", "planned", "club", "distance", "passed", "recorded")
 # 3000m / 6000m: the boats that passed the station before, then this station.
 DOWNSTREAM_COLUMNS = ("boat", "upstream", "passed", "recorded")
+# Regattaleitung: race info and the passing time at every station.
+OVERVIEW_COLUMNS = (
+    "race",
+    "boat",
+    "planned",
+    "club",
+    "distance",
+    "st_start",
+    "st_3000m",
+    "st_6000m",
+)
+# All columns of the list; the view mode picks the visible ones.
+TREE_COLUMNS = (
+    "boat",
+    "planned",
+    "club",
+    "distance",
+    "passed",
+    "recorded",
+    "current",
+    "deleted",
+    "upstream",
+    "race",
+    "st_start",
+    "st_3000m",
+    "st_6000m",
+)
 IS_LINUX = sys.platform.startswith("linux")
 ROWS_BEFORE_FOCUS = 5  # rows shown above the boat in focus
 
@@ -97,10 +126,20 @@ class App(tk.Tk):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.config_ = config
+        # The Regattaleitung has no station: it only watches and does not record.
+        self._overview = config.station == OVERVIEW_STATION
+        self._station_timings: dict[str, list[dict[str, Any]]] = {}
         self.title(f"{APP_NAME} {APP_VERSION} - {config.station}")
         self._setup_platform_style()
         self._setup_list_style()
         self.minsize(int(760 * self._font_scale), 420)
+        if self._overview:
+            # A large window: 90 % of the screen height, centered. The width
+            # is capped, wider only adds empty space (e.g. ultrawide screens).
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            w = min(int(sw * 0.9), int(1400 * self._font_scale))
+            h = int(sh * 0.9)
+            self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 3}")
 
         # Validated when the configuration is loaded.
         self._tz = ZoneInfo(config.timezone)
@@ -336,11 +375,22 @@ class App(tk.Tk):
         values["base_url"] = values["base_url"].rstrip("/")
         old = self.config_
         try:
-            save_login_parameters(**values)
+            save_login_parameters(
+                client_id=values["client_id"],
+                region=values["region"],
+                base_url=values["base_url"],
+                timezone=values["timezone"],
+            )
         except ConfigError as exc:
             self._status.set(str(exc))
             return
-        self.config_ = replace(old, **values)
+        self.config_ = replace(
+            old,
+            client_id=values["client_id"],
+            region=values["region"],
+            base_url=values["base_url"],
+            timezone=values["timezone"],
+        )
         self._tz = ZoneInfo(values["timezone"])
         self._build_clients()
         if (values["client_id"], values["region"]) != (old.client_id, old.region):
@@ -399,13 +449,70 @@ class App(tk.Tk):
         groups = ", ".join(me.get("groups", [])) or "no groups"
         ttk.Label(
             header,
-            text=f"Station: {self.config_.station}    User: {me['username']} ({groups})",
+            text=f"{self._where()}    User: {me['username']} ({groups})",
         ).pack(side="left")
         ttk.Button(header, text="Sign out", command=self._sign_out).pack(side="right")
         ttk.Button(header, text="Settings ...", command=self._edit_settings).pack(
             side="right", padx=4
         )
 
+        self._main_active = True
+        if self._overview:
+            self._build_overview_bar()
+        else:
+            self._build_record_box()
+            self._build_bar()
+
+        # All columns exist; render switches the visible ones per view mode.
+        cols = TREE_COLUMNS
+        self._tree = ttk.Treeview(
+            self._container, columns=cols, show="headings", height=16
+        )
+        for col, title, width in (
+            ("boat", "Boat", 70),
+            ("planned", "Planned start", 100),
+            ("club", "Club", 180),
+            ("distance", "Distance", 80),
+            ("passed", "Passed at", 110),
+            ("recorded", "Recorded at", 110),
+            ("current", "Current", 70),
+            ("deleted", "Deleted", 70),
+            ("upstream", f"{self._upstream_label} passed", 120),
+            ("race", "Race", 220),
+            ("st_start", "Start", 100),
+            ("st_3000m", "3000m", 100),
+            ("st_6000m", "6000m", 100),
+        ):
+            self._tree.heading(col, text=title)
+            self._tree.column(col, width=int(width * self._font_scale), anchor="center")
+        scroll = ttk.Scrollbar(self._container, command=self._tree.yview)
+        self._tree.configure(yscrollcommand=scroll.set)
+        scroll.pack(side="right", fill="y")
+        self._tree.pack(fill="both", expand=True, pady=(4, 0))
+        self._tree.tag_configure("deleted", foreground="#888")
+        self._tree.tag_configure("finished", foreground="#777")
+        # Alternating row colors; boats missing in the race info are highlighted.
+        self._tree.tag_configure("odd", background="#ffffff")
+        self._tree.tag_configure("even", background="#eeeeee")
+        self._tree.tag_configure("odd_unknown", background="#fff4d6")
+        self._tree.tag_configure("even_unknown", background="#ffe9b3")
+        if not self._overview:
+            self._tree.bind("<Delete>", lambda _e: self._delete_selected())
+            self._tree.bind("<Double-1>", lambda _e: self._edit_selected())
+        self._items: dict[str, dict[str, Any]] = {}
+        self._all_items: list[dict[str, Any]] = []
+
+        self._update_pending_label()
+        self._fresh_view = True
+        self._refresh_race_info()
+        self._refresh()
+
+    def _where(self) -> str:
+        if self._overview:
+            return "Regattaleitung"
+        return f"Station: {self.config_.station}"
+
+    def _build_record_box(self) -> None:
         entry_frame = ttk.LabelFrame(
             self._container, text="Record passing time", padding=8
         )
@@ -448,6 +555,7 @@ class App(tk.Tk):
             side="right"
         )
 
+    def _build_bar(self) -> None:
         bar = ttk.Frame(self._container)
         bar.pack(fill="x")
         ttk.Label(bar, text="Recorded timings").pack(side="left")
@@ -472,53 +580,18 @@ class App(tk.Tk):
             bar, text="Restore", command=self._restore_selected
         )
 
-        # All columns exist; render switches the visible ones per view mode.
-        cols = (
-            "boat",
-            "planned",
-            "club",
-            "distance",
-            "passed",
-            "recorded",
-            "current",
-            "deleted",
-            "upstream",
+    def _build_overview_bar(self) -> None:
+        bar = ttk.Frame(self._container)
+        bar.pack(fill="x", pady=(8, 0))
+        ttk.Label(bar, text="Overview of all stations").pack(side="left")
+        ttk.Label(
+            bar,
+            text="yellow: not in race info    grey: passed 6000m",
+            foreground="#666",
+        ).pack(side="left", padx=12)
+        ttk.Button(bar, text="Refresh", command=self._refresh_clicked).pack(
+            side="right"
         )
-        self._tree = ttk.Treeview(
-            self._container, columns=cols, show="headings", height=16
-        )
-        for col, title, width in (
-            ("boat", "Boat", 70),
-            ("planned", "Planned start", 100),
-            ("club", "Club", 180),
-            ("distance", "Distance", 80),
-            ("passed", "Passed at", 110),
-            ("recorded", "Recorded at", 110),
-            ("current", "Current", 70),
-            ("deleted", "Deleted", 70),
-            ("upstream", f"{self._upstream_label} passed", 120),
-        ):
-            self._tree.heading(col, text=title)
-            self._tree.column(col, width=int(width * self._font_scale), anchor="center")
-        scroll = ttk.Scrollbar(self._container, command=self._tree.yview)
-        self._tree.configure(yscrollcommand=scroll.set)
-        scroll.pack(side="right", fill="y")
-        self._tree.pack(fill="both", expand=True, pady=(4, 0))
-        self._tree.tag_configure("deleted", foreground="#888")
-        # Alternating row colors; boats missing in the race info are highlighted.
-        self._tree.tag_configure("odd", background="#ffffff")
-        self._tree.tag_configure("even", background="#eeeeee")
-        self._tree.tag_configure("odd_unknown", background="#fff4d6")
-        self._tree.tag_configure("even_unknown", background="#ffe9b3")
-        self._tree.bind("<Delete>", lambda _e: self._delete_selected())
-        self._tree.bind("<Double-1>", lambda _e: self._edit_selected())
-        self._items: dict[str, dict[str, Any]] = {}
-        self._all_items: list[dict[str, Any]] = []
-
-        self._update_pending_label()
-        self._fresh_view = True
-        self._refresh_race_info()
-        self._refresh()
 
     def _edit_settings(self) -> None:
         """Dialog for the timezone and the race info interval."""
@@ -553,15 +626,19 @@ class App(tk.Tk):
         self._status.set("Settings saved.")
 
     def _key_up(self, _event: tk.Event) -> None:
-        if self._main_active and self.focus_get() is not self._tree:
+        if self._recording() and self.focus_get() is not self._tree:
             self._step_boat(1)
 
     def _key_down(self, _event: tk.Event) -> None:
-        if self._main_active and self.focus_get() is not self._tree:
+        if self._recording() and self.focus_get() is not self._tree:
             self._step_boat(-1)
 
+    def _recording(self) -> bool:
+        """True while the main view with the record box is shown."""
+        return self._main_active and not self._overview
+
     def _key_s(self, _event: tk.Event) -> None:
-        if self._main_active:
+        if self._recording():
             self._record()
 
     def _record_key(self) -> str:
@@ -676,11 +753,15 @@ class App(tk.Tk):
         return ttk.Button(parent, image=image, command=command)
 
     def _setup_list_style(self) -> None:
-        """Make the font of the timing list 2 pt larger than the default."""
+        """Make the font of the timing list larger than the default.
+
+        2 pt, and 4 pt for the overview of the Regattaleitung.
+        """
+        delta = 4 if self._overview else 2
         base = tkfont.nametofont("TkDefaultFont")
         size = int(base.cget("size"))
         # A negative size is in pixels: grow it the other way.
-        new_size = size + 2 if size > 0 else size - 2
+        new_size = size + delta if size > 0 else size - delta
         self._list_font = base.copy()  # keep a reference, Tk drops unused fonts
         self._list_font.configure(size=new_size)
         self._font_scale = abs(new_size) / abs(size)
@@ -722,7 +803,7 @@ class App(tk.Tk):
         )
 
     def _refresh(self) -> None:
-        if not self._auth.signed_in:
+        if not self._auth.signed_in or self._overview:
             return
         self._run_async(
             lambda: self._api.list_timings(self.config_.station),
@@ -776,6 +857,11 @@ class App(tk.Tk):
         """Pull the reference data: race info at the start, else the station before."""
         if not self._auth.signed_in:
             return
+        if self._overview:
+            self._run_async(
+                self._fetch_overview, self._overview_loaded, self._overview_failed
+            )
+            return
         if self._upstream_station:
             station = self._upstream_station
             self._run_async(
@@ -787,6 +873,28 @@ class App(tk.Tk):
         self._run_async(
             self._api.list_race_info, self._race_info_loaded, self._race_info_failed
         )
+
+    def _fetch_overview(self) -> dict[str, Any]:
+        """Race info and the timings of all stations (runs in a worker thread)."""
+        return {
+            "race_info": self._api.list_race_info(),
+            "timings": {s: self._api.list_timings(s) for s in STATIONS},
+        }
+
+    def _overview_loaded(self, data: dict[str, Any]) -> None:
+        self._race_info = data["race_info"]
+        self._station_timings = data["timings"]
+        boats = sum(1 for r in self._race_info if not r.get("deleted"))
+        self._status.set(
+            f"Overview updated at {self._now().strftime('%H:%M:%S')}: {boats} boats."
+        )
+        self._render_timings()
+        self._fresh_view = False
+
+    def _overview_failed(self, exc: Exception) -> None:
+        self._status.set(f"Overview failed: {exc}")
+        self._render_timings()
+        self._fresh_view = False
 
     def _upstream_loaded(self, items: list[dict[str, Any]]) -> None:
         self._upstream = items
@@ -912,6 +1020,89 @@ class App(tk.Tk):
         except (KeyError, TypeError, ValueError):
             return None
 
+    def _station_cell(self, item: dict[str, Any] | None) -> str:
+        if item is None:
+            return ""
+        if item.get("deleted"):
+            return "(deleted)"
+        passed = item.get("passed_at")
+        return self._fmt(passed) if passed else "-"
+
+    def _rows_overview(self) -> list[Row]:
+        """Regattaleitung: every boat of the race info with its time at each station."""
+        current = {
+            s: {
+                i["boat_number"]: i
+                for i in self._station_timings.get(s, [])
+                if i["current"]
+            }
+            for s in STATIONS
+        }
+
+        def row(
+            iid: str,
+            boat: int,
+            race: dict[str, Any] | None,
+            planned: time | None,
+            unknown: bool = False,
+        ) -> Row:
+            texts = {
+                "boat": boat,
+                "planned": planned.strftime("%H:%M:%S") if planned and race else "",
+                "race": f"{race['race_number']}: {race['race_name']}" if race else "",
+                "club": race.get("club", "") if race else "",
+                "distance": race.get("distance", "") if race else "",
+            }
+            for s in STATIONS:
+                texts[f"st_{s}"] = self._station_cell(current[s].get(boat))
+            if unknown:
+                texts["club"] = "(not in race info)"
+                texts["planned"] = f"~{planned.strftime('%H:%M:%S')}" if planned else ""
+            values = tuple(texts.get(c, "") for c in TREE_COLUMNS)
+            last = current["6000m"].get(boat)
+            finished = bool(last and not last.get("deleted"))
+            return Row(
+                iid,
+                boat,
+                values,
+                planned,
+                ("finished",) if finished else (),
+                unknown=unknown,
+            )
+
+        races = sorted(
+            (r for r in self._race_info if not r.get("deleted")),
+            key=lambda r: (
+                _parse_planned(r.get("planned_start")) or time.max,
+                r["boat_number"],
+            ),
+        )
+        rows = []
+        known: set[int] = set()
+        for race in races:
+            boat = race["boat_number"]
+            known.add(boat)
+            planned = _parse_planned(race.get("planned_start"))
+            rows.append(row(f"ov:{race['race_number']}:{boat}", boat, race, planned))
+        # Boats with a timing that are not in the race info: placed by their
+        # passing time at the start, without one they come last.
+        timed = {
+            b
+            for s in STATIONS
+            for b, i in current[s].items()
+            if not i.get("deleted") and b not in known
+        }
+        extra = []
+        for boat in timed:
+            start = current["start"].get(boat)
+            stand_in = None
+            if start and not start.get("deleted"):
+                stand_in = self._passed_time(start)
+            extra.append(row(f"ov:?:{boat}", boat, None, stand_in, unknown=bool(races)))
+        rows += extra
+        rows.sort(key=lambda r: (r.planned or time.max, r.boat))
+        return rows
+
     def _rows_downstream(self) -> list[Row]:
         """3000m / 6000m: boats in the order they passed the station before.
 
@@ -998,20 +1189,26 @@ class App(tk.Tk):
     def _render_timings(self) -> None:
         if not self._tree.winfo_exists():
             return
-        show_all = self._show_all_var.get()
-        self._update_restore_button(show_all)
+        show_all = not self._overview and self._show_all_var.get()
+        if not self._overview:
+            self._update_restore_button(show_all)
         top = self._tree.yview()[0]
         selected = self._tree.selection()
         self._tree.delete(*self._tree.get_children())
         self._items = {}
-        if show_all:
+        if self._overview:
+            columns = OVERVIEW_COLUMNS
+        elif show_all:
             columns = ALL_COLUMNS
         elif self._upstream_station:
             columns = DOWNSTREAM_COLUMNS
         else:
             columns = NORMAL_COLUMNS
         self._tree.configure(displaycolumns=columns)
-        rows = self._rows_all() if show_all else self._rows_current()
+        if self._overview:
+            rows = self._rows_overview()
+        else:
+            rows = self._rows_all() if show_all else self._rows_current()
         shown = []
         for row in rows:
             if self._tree.exists(row.iid):  # never fail on a duplicate key

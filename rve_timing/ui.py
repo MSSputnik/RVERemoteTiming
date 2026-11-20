@@ -1,6 +1,7 @@
 """Tkinter user interface."""
 
 import queue
+import sys
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
@@ -41,6 +42,7 @@ class PendingEntry:
 
 ALL_COLUMNS = ("boat", "passed", "recorded", "current", "deleted")
 NORMAL_COLUMNS = ("boat", "planned", "club", "distance", "passed", "recorded")
+IS_LINUX = sys.platform.startswith("linux")
 ROWS_BEFORE_FOCUS = 5  # rows shown above the boat in focus
 
 # Activity indicator (lightning bolt in the bottom right corner).
@@ -64,6 +66,17 @@ class Row:
     unknown: bool = False  # timing of a boat that is not in the race info
 
 
+def _arrow_image(up: bool, width: int = 15, height: int = 9) -> tk.PhotoImage:
+    """A filled triangle drawn pixel by pixel, independent of any font."""
+    image = tk.PhotoImage(width=width, height=height)
+    for y in range(height):
+        row = y if up else height - 1 - y  # the tip is at row 0
+        half = (row * (width - 1)) // (2 * (height - 1))
+        mid = width // 2
+        image.put("#333333", to=(mid - half, y, mid + half + 1, y + 1))
+    return image
+
+
 def _parse_planned(value: Any) -> time | None:
     """Parse the planned start (time of day, e.g. 11:02:00) of the race info."""
     try:
@@ -77,6 +90,7 @@ class App(tk.Tk):
         super().__init__()
         self.config_ = config
         self.title(f"{APP_NAME} {APP_VERSION} - {config.station}")
+        self._setup_platform_style()
         self._setup_list_style()
         self.minsize(int(760 * self._font_scale), 420)
 
@@ -95,6 +109,7 @@ class App(tk.Tk):
         self._pending: deque[PendingEntry] = deque()
         self._results: queue.Queue[Callable[[], None]] = queue.Queue()
         self._sending = False
+        self._arrow_images: list[tk.PhotoImage] = []
         self._race_info: list[dict[str, Any]] = []
         self._focus_boat: int | None = None  # boat to scroll to on next render
         self._fresh_view = True  # scroll to the boats due now on next render
@@ -336,12 +351,8 @@ class App(tk.Tk):
         boat.focus_set()
         arrows = ttk.Frame(entry_frame)
         arrows.pack(side="left", padx=(0, 6))
-        ttk.Button(
-            arrows, text="\u25b2", width=3, command=lambda: self._step_boat(1)
-        ).pack()
-        ttk.Button(
-            arrows, text="\u25bc", width=3, command=lambda: self._step_boat(-1)
-        ).pack()
+        self._arrow_button(arrows, True, lambda: self._step_boat(1)).pack()
+        self._arrow_button(arrows, False, lambda: self._step_boat(-1)).pack()
         ttk.Button(entry_frame, text="Record now (s)", command=self._record).pack(
             side="left"
         )
@@ -369,6 +380,10 @@ class App(tk.Tk):
         )
         ttk.Button(bar, text="Edit time ...", command=self._edit_selected).pack(
             side="right"
+        )
+        # Only shown in the "Show all records" view, see _update_restore_button.
+        self._restore_btn = ttk.Button(
+            bar, text="Restore", command=self._restore_selected
         )
 
         # All columns exist; render switches the visible ones per view mode.
@@ -512,6 +527,34 @@ class App(tk.Tk):
         if isinstance(exc, ApiError) and exc.status == 401 and not self._auth.signed_in:
             self._sign_out_expired()
 
+    def _setup_platform_style(self) -> None:
+        """Linux only: use the clam theme; Windows keeps its native look."""
+        if not IS_LINUX:
+            return
+        style = ttk.Style(self)
+        if "clam" in style.theme_names():
+            style.theme_use("clam")
+        if set(tkfont.families(self)) <= {"fixed"}:
+            print(
+                "Note: this Tk has no scalable fonts (typical for the Python "
+                "downloaded by uv), so font sizes cannot change. Use a Python "
+                "with the system Tk (python3-tk) for better text.",
+                file=sys.stderr,
+            )
+
+    def _arrow_button(
+        self, parent: tk.Misc, up: bool, command: Callable[[], None]
+    ) -> ttk.Button:
+        """Up/down button. Linux draws the arrow as an image, because the
+        font may lack the triangle glyphs (Windows keeps the text glyph)."""
+        if not IS_LINUX:
+            return ttk.Button(
+                parent, text="\u25b2" if up else "\u25bc", width=3, command=command
+            )
+        image = _arrow_image(up)
+        self._arrow_images.append(image)  # Tk drops images without a reference
+        return ttk.Button(parent, image=image, command=command)
+
     def _setup_list_style(self) -> None:
         """Make the font of the timing list 2 pt larger than the default."""
         base = tkfont.nametofont("TkDefaultFont")
@@ -581,6 +624,13 @@ class App(tk.Tk):
         self._fresh_view = True
         self._render_timings()
         self._fresh_view = False
+
+    def _update_restore_button(self, show_all: bool) -> None:
+        shown = bool(self._restore_btn.winfo_manager())
+        if show_all and not shown:
+            self._restore_btn.pack(side="right", padx=4)
+        elif not show_all and shown:
+            self._restore_btn.pack_forget()
 
     def _show_timings(self, items: list[dict[str, Any]]) -> None:
         self._all_items = items
@@ -732,6 +782,7 @@ class App(tk.Tk):
         if not self._tree.winfo_exists():
             return
         show_all = self._show_all_var.get()
+        self._update_restore_button(show_all)
         top = self._tree.yview()[0]
         selected = self._tree.selection()
         self._tree.delete(*self._tree.get_children())
@@ -809,6 +860,50 @@ class App(tk.Tk):
                 recorded_at=self._now(),
                 deleted=True,
             )
+        )
+        self._update_pending_label()
+        self._send_pending()
+
+    def _restore_selected(self) -> None:
+        """Record an older entry again: same boat and passing time, new entry."""
+        item = self._selected_item()
+        if item is None:
+            return
+        boat = item["boat_number"]
+        if item.get("current"):
+            messagebox.showinfo(
+                "Restore",
+                f"This is already the current entry of boat {boat}.\n"
+                "Select an older entry to restore it.",
+                parent=self,
+            )
+            return
+        if item.get("deleted"):
+            messagebox.showinfo(
+                "Restore",
+                "A delete marker cannot be restored.\n"
+                "Select an older timing entry to restore it.",
+                parent=self,
+            )
+            return
+        try:
+            passed_at = datetime.fromisoformat(item["passed_at"])
+        except (KeyError, TypeError, ValueError):
+            messagebox.showinfo(
+                "Restore", "This entry has no valid passing time.", parent=self
+            )
+            return
+        if passed_at.tzinfo is None:
+            passed_at = passed_at.replace(tzinfo=self._tz)
+        # A new entry with the latest recorded_at becomes the current one.
+        self._focus_boat = boat
+        self._pending.append(
+            PendingEntry(
+                uuid.uuid4(), boat, passed_at=passed_at, recorded_at=self._now()
+            )
+        )
+        self._status.set(
+            f"Boat {boat}: restoring {passed_at.astimezone(self._tz).strftime('%H:%M:%S')} ..."
         )
         self._update_pending_label()
         self._send_pending()

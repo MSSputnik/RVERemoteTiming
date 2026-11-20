@@ -84,10 +84,14 @@ uv run python -m rve_timing
      corrections and delete markers (greyed out). The columns change to Boat,
      Passed at, Recorded at, Current and Deleted, and the race info is not
      shown. The checkbox state is saved in `config.json`.
-4. To correct a time, select an entry and click "Edit time ..." (or double
+4. In the "Show all records" view, the "Restore" button records an older entry
+   again. Select it and click "Restore": a new entry with the same boat and
+   passing time is sent and becomes the current one. The current entry and
+   delete markers cannot be restored, the app shows a message instead.
+5. To correct a time, select an entry and click "Edit time ..." (or double
    click it). Enter the new time as HH:MM:SS. The date stays the same. This
    sends a new entry, the latest one wins.
-5. To delete a timing, select an entry and click "Delete" (or press the Delete
+6. To delete a timing, select an entry and click "Delete" (or press the Delete
    key). This sends a delete marker for the boat. The history is kept, and a
    later normal entry brings the boat back.
 
@@ -125,6 +129,27 @@ needed. Users who must set a new password have to do that outside the app.
 | `rve_timing/ui.py` | Tkinter user interface. |
 | `rve_timing/version.py` | Application name and version. |
 | `rve_timing/__main__.py` | Entry point. |
+
+## Linux
+
+On Linux the app uses the `clam` theme and draws the up and down arrows as
+images, because many fonts lack the triangle glyphs. Windows keeps its native
+look.
+
+Font sizes only work if Tk can use scalable fonts (Xft). The Python that `uv`
+downloads has a Tk without Xft, so every text is drawn in one small bitmap
+font and the font size cannot change. The app prints a note when it detects
+this. For better text, use a Python 3.13 with the system Tk, for example
+`python3.13` and `python3.13-tk`, and point uv at it with
+`uv sync --python /usr/bin/python3.13`.
+
+If you use the same checkout from Windows and WSL, give each system its own
+virtual environment, otherwise `uv` replaces `.venv` on every switch. On the
+Linux side set it before `uv run`:
+
+```bash
+export UV_PROJECT_ENVIRONMENT=$HOME/.venvs/rve
+```
 
 ## Development
 

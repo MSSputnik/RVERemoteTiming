@@ -41,10 +41,10 @@ def xor_decode(value: str) -> str:
 
 @dataclass(frozen=True)
 class Config:
-    client_id: str
     station: str
-    base_url: str
-    region: str
+    client_id: str = ""
+    base_url: str = ""
+    region: str = ""
     username: str = ""
     timezone: str = "Europe/Berlin"
     auto_increment: bool = False
@@ -72,11 +72,9 @@ def load_config(path: Path | None = None) -> Config:
     if not isinstance(raw, dict):
         raise ConfigError("Configuration must be a JSON object.")
 
-    missing = [
-        k for k in ("client_id", "station", "base_url", "region") if not raw.get(k)
-    ]
-    if missing:
-        raise ConfigError(f"Missing configuration value(s): {', '.join(missing)}")
+    # client_id, region and base_url may be empty: they are set in the app.
+    if not raw.get("station"):
+        raise ConfigError("Missing configuration value: station")
 
     station = str(raw["station"])
     if station not in STATIONS:
@@ -114,10 +112,10 @@ def load_config(path: Path | None = None) -> Config:
             refresh_token = ""  # corrupt value: ignore, user signs in again
 
     return Config(
-        client_id=str(raw["client_id"]),
+        client_id=str(raw.get("client_id", "")),
         station=station,
-        base_url=str(raw["base_url"]).rstrip("/"),
-        region=str(raw["region"]),
+        base_url=str(raw.get("base_url", "")).rstrip("/"),
+        region=str(raw.get("region", "")),
         username=str(raw.get("username", "")),
         timezone=timezone,
         auto_increment=auto_increment,
@@ -135,6 +133,24 @@ def save_refresh_token(token: str | None, path: Path | None = None) -> None:
     _update_config(REFRESH_TOKEN_KEY, xor_encode(token) if token else None, path)
 
 
+def save_username(username: str, path: Path | None = None) -> None:
+    """Store the user name that was used to sign in."""
+    _update_config("username", username, path)
+
+
+def save_display_settings(
+    timezone: str, race_info_interval_minutes: int, path: Path | None = None
+) -> None:
+    """Store the values of the "Settings" dialog of the main window."""
+    _update_config_many(
+        {
+            "timezone": timezone,
+            "race_info_interval_minutes": race_info_interval_minutes,
+        },
+        path,
+    )
+
+
 def save_auto_increment(value: bool, path: Path | None = None) -> None:
     """Store the state of the "Auto increment" checkbox."""
     _update_config("auto_increment", value, path)
@@ -145,15 +161,40 @@ def save_show_all_records(value: bool, path: Path | None = None) -> None:
     _update_config("show_all_records", value, path)
 
 
+def save_login_parameters(
+    client_id: str,
+    region: str,
+    base_url: str,
+    timezone: str,
+    path: Path | None = None,
+) -> None:
+    """Store the values of the "Set Login Parameters" dialog."""
+    _update_config_many(
+        {
+            "client_id": client_id,
+            "region": region,
+            "base_url": base_url,
+            "timezone": timezone,
+        },
+        path,
+    )
+
+
 def _update_config(key: str, value: object, path: Path | None) -> None:
     """Set a key in the config file (None removes it), keeping all others."""
+    _update_config_many({key: value}, path)
+
+
+def _update_config_many(updates: dict[str, object], path: Path | None) -> None:
+    """Set keys in the config file (None removes one), keeping all others."""
     path = path or config_path()
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-        if value is None:
-            raw.pop(key, None)
-        else:
-            raw[key] = value
+        for key, value in updates.items():
+            if value is None:
+                raw.pop(key, None)
+            else:
+                raw[key] = value
         path.write_text(json.dumps(raw, indent=2) + "\n", encoding="utf-8")
     except (OSError, ValueError) as exc:
         raise ConfigError(f"Cannot write configuration '{path}': {exc}") from exc

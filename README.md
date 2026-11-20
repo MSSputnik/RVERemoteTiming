@@ -31,26 +31,32 @@ environment variable to use another file.
 
 Required:
 
+- `station`: one of `start`, `3000m`, `6000m`.
+
+Set in the app with the "Set Login Parameters ..." button on the sign-in
+screen (see below). You can also write them into the file:
+
 - `client_id`: Cognito app client ID.
 - `region`: AWS region of the Cognito user pool, for example `eu-west-1`.
-- `station`: one of `start`, `3000m`, `6000m`.
 - `base_url`: base URL of the API, for example
   `https://langstrecke-api.mssputnik.click`.
+- `timezone`: IANA timezone, default `Europe/Berlin`. The planned start of the
+  race info is taken as a time in this timezone. The passing and recording
+  times from the API are converted to it for display. The "Settings ..."
+  button of the main window changes it too.
 
 Optional:
 
-- `username`: pre-fills the username on the sign-in screen.
-- `timezone`: IANA timezone, default `Europe/Berlin`. The planned start of the
-  race info is taken as a time in this timezone. The passing and recording
-  times from the API are converted to it for display. An unknown name stops
-  the app at start.
+- `username`: pre-fills the username on the sign-in screen. The app saves it
+  after each successful sign-in with the password.
 - `auto_increment`: `true` or `false` (default). When `true`, the boat number
   is increased by one after each "Record now". It is the start value of the
   "Auto increment" checkbox. The app writes it back when you toggle the
   checkbox.
 - `race_info_interval_minutes`: how often the race info (at `3000m` and
   `6000m`: the timings of the station before) is pulled automatically.
-  Default `5`, `0` turns the automatic pull off.
+  Default `5`, `0` turns the automatic pull off. The "Settings ..." button of
+  the main window changes it, and the new interval applies at once.
 - `show_all_records`: `true` or `false` (default). State of the "Show all
   records" checkbox. The app writes it back when you toggle the checkbox.
 
@@ -60,9 +66,19 @@ Optional:
 uv run python -m rve_timing
 ```
 
+For one config file per station, use `run_start.ps1`, `run_3000m.ps1` or
+`run_6000m.ps1`. They start the app with `config_start.json`,
+`config_3000m.json` or `config_6000m.json`. If that file does not exist yet,
+`run_station.ps1` creates it from `config.example.json` with the station set
+and the username cleared, then you fill in the rest.
+
 ## Usage
 
-1. Sign in with your Cognito username and password.
+1. On the first start, click "Set Login Parameters ..." on the sign-in screen
+   and enter the client ID, region, base URL and timezone. They are saved in
+   `config.json`. Then sign in with your Cognito username and password.
+   Changing the client ID or region removes a remembered login, because its
+   token belongs to the old user pool. An unknown timezone is rejected.
 2. Type a boat number and press Enter, the `s` key or click "Record now (s)".
    The current time is sent as the passing time to the configured station.
    The arrow buttons next to the field, or the Up and Down keys, change the

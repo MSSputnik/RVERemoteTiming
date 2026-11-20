@@ -1,6 +1,7 @@
 """Tkinter user interface."""
 
 import queue
+import re
 import sys
 import threading
 import tkinter as tk
@@ -8,12 +9,12 @@ import tkinter.font as tkfont
 import uuid
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, time
 from time import monotonic
 from tkinter import messagebox, ttk
 from typing import Any
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .api import ApiClient, ApiError
 from .auth import AuthUnavailable, CognitoAuth
@@ -22,8 +23,11 @@ from .config import (
     Config,
     ConfigError,
     save_auto_increment,
+    save_display_settings,
+    save_login_parameters,
     save_refresh_token,
     save_show_all_records,
+    save_username,
 )
 from .version import APP_NAME, APP_VERSION
 
@@ -106,10 +110,7 @@ class App(tk.Tk):
         self.bind("<Down>", self._key_down)
         self.bind("<s>", self._key_s)
         self.bind("<S>", self._key_s)
-        self._auth = CognitoAuth(
-            config.client_id, config.region, self._store_refresh_token
-        )
-        self._api = ApiClient(config.base_url, self._auth)
+        self._build_clients()
         self._pending: deque[PendingEntry] = deque()
         self._results: queue.Queue[Callable[[], None]] = queue.Queue()
         self._sending = False
@@ -153,13 +154,35 @@ class App(tk.Tk):
         self.after(100, self._poll_results)
         self.after(BLINK_INTERVAL_MS, self._blink)
         self.after(RETRY_INTERVAL_MS, self._retry_timer)
-        if config.race_info_interval_minutes > 0:
-            self.after(self._race_interval_ms(), self._race_timer)
+        self._race_timer_id: str | None = None
+        self._schedule_race_timer()
         self._show_login()
-        if config.refresh_token:
+        if self._missing_login_parameters():
+            self._status.set(
+                "Login parameters are missing. Click Set Login Parameters ..."
+            )
+        elif config.refresh_token:
             self._auto_login(config.refresh_token)
 
     # ---- helpers -------------------------------------------------------
+
+    def _build_clients(self) -> None:
+        """Create the Cognito and API clients from the current configuration."""
+        cfg = self.config_
+        self._auth = CognitoAuth(cfg.client_id, cfg.region, self._store_refresh_token)
+        self._api = ApiClient(cfg.base_url, self._auth)
+
+    def _missing_login_parameters(self) -> list[str]:
+        cfg = self.config_
+        return [
+            name
+            for name, value in (
+                ("client ID", cfg.client_id),
+                ("region", cfg.region),
+                ("base URL", cfg.base_url),
+            )
+            if not value
+        ]
 
     def _run_async(
         self,
@@ -256,12 +279,21 @@ class App(tk.Tk):
             row=3, column=1, sticky="w"
         )
         self._login_btn = ttk.Button(frame, text="Sign in", command=self._do_login)
-        self._login_btn.grid(row=4, column=0, columnspan=2, pady=10)
+        self._login_btn.grid(row=4, column=0, columnspan=2, pady=(10, 4))
+        ttk.Button(
+            frame, text="Set Login Parameters ...", command=self._set_login_parameters
+        ).grid(row=5, column=0, columnspan=2, pady=(0, 4))
         for w in (user, pw):
             w.bind("<Return>", lambda _e: self._do_login())
         (pw if self._user_var.get() else user).focus_set()
 
     def _do_login(self) -> None:
+        missing = self._missing_login_parameters()
+        if missing:
+            self._status.set(
+                f"Set the login parameters first (missing: {', '.join(missing)})."
+            )
+            return
         username, password = self._user_var.get().strip(), self._pw_var.get()
         if not username or not password:
             self._status.set("Enter username and password.")
@@ -276,7 +308,47 @@ class App(tk.Tk):
             self._auth.sign_in(username, password)
             return self._api.me()
 
-        self._run_async(work, self._login_ok, self._login_failed)
+        def signed_in(me: dict[str, Any]) -> None:
+            self._remember_username(username)
+            self._login_ok(me)
+
+        self._run_async(work, signed_in, self._login_failed)
+
+    def _remember_username(self, username: str) -> None:
+        """Keep the user name in the config, so it is pre-filled next time."""
+        if username == self.config_.username:
+            return
+        try:
+            save_username(username)
+        except ConfigError as exc:
+            self._status.set(f"Cannot save the user name: {exc}")
+            return
+        self.config_ = replace(self.config_, username=username)
+
+    def _set_login_parameters(self) -> None:
+        """Dialog for client ID, region, base URL and timezone; saved in the config."""
+        if self._activity > 0:
+            self._status.set("Please wait until the running request is finished.")
+            return
+        values = _ask_login_parameters(self, self.config_)
+        if values is None:
+            return
+        values["base_url"] = values["base_url"].rstrip("/")
+        old = self.config_
+        try:
+            save_login_parameters(**values)
+        except ConfigError as exc:
+            self._status.set(str(exc))
+            return
+        self.config_ = replace(old, **values)
+        self._tz = ZoneInfo(values["timezone"])
+        self._build_clients()
+        if (values["client_id"], values["region"]) != (old.client_id, old.region):
+            # A stored refresh token only works for the user pool it came from.
+            self._forget_refresh_token()
+            self._remember_var.set(False)
+            self.config_ = replace(self.config_, refresh_token="")
+        self._status.set("Login parameters saved.")
 
     def _auto_login(self, refresh_token: str) -> None:
         """Sign in with the stored refresh token, without credentials."""
@@ -330,6 +402,9 @@ class App(tk.Tk):
             text=f"Station: {self.config_.station}    User: {me['username']} ({groups})",
         ).pack(side="left")
         ttk.Button(header, text="Sign out", command=self._sign_out).pack(side="right")
+        ttk.Button(header, text="Settings ...", command=self._edit_settings).pack(
+            side="right", padx=4
+        )
 
         entry_frame = ttk.LabelFrame(
             self._container, text="Record passing time", padding=8
@@ -444,6 +519,38 @@ class App(tk.Tk):
         self._fresh_view = True
         self._refresh_race_info()
         self._refresh()
+
+    def _edit_settings(self) -> None:
+        """Dialog for the timezone and the race info interval."""
+        cfg = self.config_
+        values = _ask_fields(
+            self,
+            "Settings",
+            (
+                ("timezone", "Timezone (e.g. Europe/Berlin)", cfg.timezone),
+                (
+                    "interval",
+                    "Race info pull interval in minutes (0 = off)",
+                    str(cfg.race_info_interval_minutes),
+                ),
+            ),
+            _check_settings,
+        )
+        if values is None:
+            return
+        interval = int(values["interval"])
+        try:
+            save_display_settings(values["timezone"], interval)
+        except ConfigError as exc:
+            self._status.set(str(exc))
+            return
+        self.config_ = replace(
+            cfg, timezone=values["timezone"], race_info_interval_minutes=interval
+        )
+        self._tz = ZoneInfo(values["timezone"])
+        self._schedule_race_timer()
+        self._render_timings()  # times are shown in the new timezone
+        self._status.set("Settings saved.")
 
     def _key_up(self, _event: tk.Event) -> None:
         if self._main_active and self.focus_get() is not self._tree:
@@ -588,10 +695,19 @@ class App(tk.Tk):
     def _race_interval_ms(self) -> int:
         return self.config_.race_info_interval_minutes * 60_000
 
+    def _schedule_race_timer(self) -> None:
+        """(Re)start the automatic pull; an interval of 0 turns it off."""
+        if self._race_timer_id is not None:
+            self.after_cancel(self._race_timer_id)
+            self._race_timer_id = None
+        if self.config_.race_info_interval_minutes > 0:
+            self._race_timer_id = self.after(self._race_interval_ms(), self._race_timer)
+
     def _race_timer(self) -> None:
+        self._race_timer_id = None
         if self._main_active:
             self._refresh_race_info()
-        self.after(self._race_interval_ms(), self._race_timer)
+        self._schedule_race_timer()
 
     def _retry_timer(self) -> None:
         self._send_pending()
@@ -1050,6 +1166,100 @@ class App(tk.Tk):
         )
         self._update_pending_label()
         self._send_pending()
+
+
+def _ask_fields(
+    parent: tk.Tk,
+    title: str,
+    fields: tuple[tuple[str, str, str], ...],
+    check: Callable[[dict[str, str]], str],
+) -> dict[str, str] | None:
+    """Modal dialog with one text field per (key, label, value).
+
+    check returns a message for the first invalid value, or an empty string.
+    Returns None when cancelled.
+    """
+    dlg = tk.Toplevel(parent)
+    dlg.title(title)
+    dlg.transient(parent)
+    dlg.resizable(False, False)
+    frame = ttk.Frame(dlg, padding=12)
+    frame.pack()
+    variables: dict[str, tk.StringVar] = {}
+    first: ttk.Entry | None = None
+    for row, (key, label, value) in enumerate(fields):
+        ttk.Label(frame, text=label).grid(row=row, column=0, sticky="e", padx=4, pady=4)
+        variables[key] = tk.StringVar(value=value)
+        entry = ttk.Entry(frame, textvariable=variables[key], width=48)
+        entry.grid(row=row, column=1, pady=4)
+        first = first or entry
+    error = tk.StringVar()
+    ttk.Label(frame, textvariable=error, foreground="#b00").grid(
+        row=len(fields), column=0, columnspan=2
+    )
+    result: list[dict[str, str]] = []
+
+    def ok() -> None:
+        values = {key: var.get().strip() for key, var in variables.items()}
+        problem = check(values)
+        if problem:
+            error.set(problem)
+            return
+        result.append(values)
+        dlg.destroy()
+
+    buttons = ttk.Frame(frame)
+    buttons.grid(row=len(fields) + 1, column=0, columnspan=2, pady=(8, 0))
+    ttk.Button(buttons, text="Save", command=ok).pack(side="left", padx=4)
+    ttk.Button(buttons, text="Cancel", command=dlg.destroy).pack(side="left", padx=4)
+    dlg.bind("<Return>", lambda _e: ok())
+    dlg.bind("<Escape>", lambda _e: dlg.destroy())
+    if first is not None:
+        first.focus_set()
+    dlg.grab_set()
+    parent.wait_window(dlg)
+    return result[0] if result else None
+
+
+def _ask_login_parameters(parent: tk.Tk, config: Config) -> dict[str, str] | None:
+    """Modal dialog for the connection settings. None when cancelled."""
+    return _ask_fields(
+        parent,
+        "Login parameters",
+        (
+            ("client_id", "Client ID", config.client_id),
+            ("region", "Region (e.g. eu-west-1)", config.region),
+            ("base_url", "Base URL", config.base_url),
+            ("timezone", "Timezone (e.g. Europe/Berlin)", config.timezone),
+        ),
+        _check_login_parameters,
+    )
+
+
+def _check_settings(values: dict[str, str]) -> str:
+    """Validate the timezone and the pull interval of the settings dialog."""
+    try:
+        ZoneInfo(values["timezone"])
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return f"Unknown timezone {values['timezone']}."
+    if not re.fullmatch(r"\d{1,4}", values["interval"]):
+        return "The interval is a whole number of minutes, 0 to 9999."
+    return ""
+
+
+def _check_login_parameters(values: dict[str, str]) -> str:
+    """Return a message for the first invalid value, or an empty string."""
+    if not values["client_id"]:
+        return "Enter the client ID."
+    if not re.fullmatch(r"[a-z]{2}(-[a-z]+)+-\d", values["region"]):
+        return "The region looks like eu-west-1."
+    if not re.fullmatch(r"https?://[^\s/]+(/\S*)?", values["base_url"]):
+        return "The base URL starts with https:// (or http://)."
+    try:
+        ZoneInfo(values["timezone"])
+    except (ZoneInfoNotFoundError, ValueError, OSError):
+        return f"Unknown timezone {values['timezone']}."
+    return ""
 
 
 def _parse_time(text: str, base: datetime) -> datetime | None:

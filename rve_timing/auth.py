@@ -4,6 +4,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import boto3
 from botocore import UNSIGNED
@@ -50,14 +51,22 @@ class CognitoAuth:
         self._client_id = client_id
         # Called with the refresh token after every sign in / refresh.
         self._on_refresh_token = on_refresh_token
-        # Public app client calls are unsigned, no AWS credentials are needed.
-        self._client = boto3.client(
-            "cognito-idp",
-            region_name=region,
-            config=BotoConfig(signature_version=UNSIGNED),
-        )
+        self._region = region
+        # Created on first use, so an empty or wrong region does not stop the
+        # app from starting. It is reported when signing in.
+        self._client: Any = None
         self._tokens: Tokens | None = None
         self._lock = threading.Lock()
+
+    def _cognito(self) -> Any:
+        if self._client is None:
+            # Public app client calls are unsigned, no AWS credentials are needed.
+            self._client = boto3.client(
+                "cognito-idp",
+                region_name=self._region,
+                config=BotoConfig(signature_version=UNSIGNED),
+            )
+        return self._client
 
     @property
     def signed_in(self) -> bool:
@@ -65,7 +74,7 @@ class CognitoAuth:
 
     def sign_in(self, username: str, password: str) -> None:
         try:
-            resp = self._client.initiate_auth(
+            resp = self._cognito().initiate_auth(
                 ClientId=self._client_id,
                 AuthFlow="USER_PASSWORD_AUTH",
                 AuthParameters={"USERNAME": username, "PASSWORD": password},
@@ -105,7 +114,7 @@ class CognitoAuth:
                 raise AuthError("Not signed in.")
             refresh_token = self._tokens.refresh_token
             try:
-                resp = self._client.initiate_auth(
+                resp = self._cognito().initiate_auth(
                     ClientId=self._client_id,
                     AuthFlow="REFRESH_TOKEN_AUTH",
                     AuthParameters={"REFRESH_TOKEN": refresh_token},

@@ -25,6 +25,46 @@
         "title": "ExportFormat",
         "type": "string"
       },
+      "Information": {
+        "description": "The one information text for all timing clients, such as contact phone numbers.\n\nNot for urgent announcements. Before the first write it is an empty text and the epoch.",
+        "properties": {
+          "text": {
+            "description": "Plain text, 0 to 300 characters.",
+            "title": "Text",
+            "type": "string"
+          },
+          "updated_at": {
+            "description": "Server time of the last write, UTC. 1970-01-01T00:00:00Z before the first write.",
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text",
+          "updated_at"
+        ],
+        "title": "Information",
+        "type": "object"
+      },
+      "InformationInput": {
+        "additionalProperties": false,
+        "description": "Body of `POST /information`.",
+        "properties": {
+          "text": {
+            "description": "Information text, plain text, 0 to 300 characters. An empty text clears the information. The client decides how to display it. Meant for static or seldom changing information such as contact phone numbers, not for urgent announcements.",
+            "maxLength": 300,
+            "minLength": 0,
+            "title": "Text",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "InformationInput",
+        "type": "object"
+      },
       "InitDatabaseRequest": {
         "additionalProperties": false,
         "properties": {
@@ -198,7 +238,7 @@
           },
           "version": {
             "examples": [
-              "2.0.0"
+              "2.1.0"
             ],
             "title": "Version",
             "type": "string"
@@ -379,7 +419,7 @@
   "paths": {
     "/admin/init-database": {
       "post": {
-        "description": "Deletes all items of the chosen scope: timings (all stations), race_info or all. Roles: Admin.",
+        "description": "Deletes all items of the chosen scope: timings (all stations), race_info or all. The scope all also deletes the information text. Roles: Admin.",
         "operationId": "initDatabase",
         "requestBody": {
           "content": {
@@ -571,6 +611,134 @@
         "summary": "Export a station",
         "tags": [
           "Exports"
+        ]
+      }
+    },
+    "/information": {
+      "get": {
+        "description": "Returns the one information text (plain text) and the time of the last write (UTC). It is meant for static or seldom changing information such as contact phone numbers, not for urgent announcements. Before the first write it returns an empty text and 1970-01-01T00:00:00Z. Roles: any signed in user.",
+        "operationId": "getInformation",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Information"
+                }
+              }
+            },
+            "description": "The information text."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "Read the information text",
+        "tags": [
+          "Information"
+        ]
+      },
+      "post": {
+        "description": "Replaces the one information text (plain text, 0 to 300 characters). It is meant for static or seldom changing information such as contact phone numbers, not for urgent announcements. An empty text clears it. The server sets updated_at. Roles: Admin, Regattaleitung.",
+        "operationId": "postInformation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InformationInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Information"
+                }
+              }
+            },
+            "description": "The stored information text."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Invalid input. The message names the first invalid field and what is wrong. Times without timezone, unknown fields and invalid IANA names are rejected."
+          },
+          "401": {
+            "description": "Missing or invalid token (from the API Gateway authorizer)."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller's groups do not allow this request."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Method not allowed for this path."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Unexpected server error."
+          }
+        },
+        "security": [
+          {
+            "cognitoJwt": []
+          }
+        ],
+        "summary": "Write the information text",
+        "tags": [
+          "Information"
         ]
       }
     },
@@ -1030,6 +1198,10 @@
     {
       "description": "Current value per boat as TRZ or CSV.",
       "name": "Exports"
+    },
+    {
+      "description": "Static or seldom changing information for all timing clients, such as contact phone numbers. Not for urgent announcements.",
+      "name": "Information"
     },
     {
       "description": "Administrative endpoints.",

@@ -117,6 +117,14 @@ class ApiClient:
         )
         return resp.content
 
+    def get_information(self) -> dict[str, Any]:
+        """The information text of the Regattaleitung: text and updated_at."""
+        return self._request("GET", "/information").json()
+
+    def post_information(self, text: str) -> dict[str, Any]:
+        """Replace the information text (0 to 300 characters, empty clears it)."""
+        return self._request("POST", "/information", json={"text": text}).json()
+
     def list_race_info(self, include_deleted: bool = False) -> list[dict[str, Any]]:
         params = {"includeDeleted": "true"} if include_deleted else None
         return self._request("GET", "/race-info", params=params).json()["items"]

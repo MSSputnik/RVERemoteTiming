@@ -140,6 +140,20 @@ kept and retried every 10 seconds. The same `entry_id` is reused, so the API
 does not store an entry twice. Entries rejected by the server with a 4xx error
 are dropped and shown in an error dialog.
 
+## Information
+
+The Regattaleitung can publish a short plain text for all stations, for
+example its phone number (`GET /information`). The station views
+show it in the "Information" box next to "Record passing time" (the row is
+split 60 : 40).
+
+- The text is shown in the normal colors. Without a text the box is empty.
+- Line breaks are kept. A typed `\n` (backslash, n) is a line break too.
+- The box has a fixed height. A longer text gets a scrollbar.
+- The app reads the text at sign-in, on "Refresh" and together with the race
+  info (every `race_info_interval_minutes` minutes). If it cannot be read,
+  the last text stays.
+
 ## Regattaleitung
 
 With `"station": "regattaleitung"` the app shows an overview instead of a
@@ -158,7 +172,8 @@ The race info and the timings of all three stations are pulled at sign-in, on
 "Refresh" and every `race_info_interval_minutes` minutes. The user needs the
 group `Regattaleitung` (or `Admin`), which may read all of them.
 
-The buttons next to "Settings ..." handle the files of the Regattaleitung:
+The buttons next to "Settings ..." handle the files and the information
+text of the Regattaleitung:
 
 - "Upload Race Info ..." asks for a CSV file (semicolon separated, header
   `boat_number;planned_start;club;race_number;race_name;distance`) and sends
@@ -169,6 +184,10 @@ The buttons next to "Settings ..." handle the files of the Regattaleitung:
   where to save and write the export of that station (`GET /exports/<station>`)
   in `trz` format, with the times in the configured timezone. The file is
   saved as sent, with CRLF line endings.
+- "Edit Information ..." loads the current information text and opens it in
+  an editor (up to 300 characters, the counter turns red above). "Save" or
+  Ctrl+Enter sends it (`POST /information`), ESC cancels. An empty text
+  removes the information. The Regattaleitung view itself does not show it.
 
 Each button remembers the last file it used in `config.json` (`last_files`)
 and preselects it next time. The first time the names are `race-info.csv`,

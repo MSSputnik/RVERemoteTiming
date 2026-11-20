@@ -36,6 +36,8 @@ from .config import (
 from .version import APP_NAME, APP_VERSION
 
 RETRY_INTERVAL_MS = 10_000
+# The information text of the Regattaleitung (POST /information).
+INFORMATION_MAX_LENGTH = 300
 
 
 @dataclass
@@ -116,6 +118,11 @@ def _arrow_image(up: bool, width: int = 15, height: int = 9) -> tk.PhotoImage:
     return image
 
 
+def _information_text(text: Any) -> str:
+    """Plain text for display. A typed backslash-n is a line break too."""
+    return str(text or "").replace("\r\n", "\n").replace("\\n", "\n").strip()
+
+
 def _disabled(widget: tk.Widget) -> bool:
     """True for a disabled ttk widget (other widgets are never disabled here)."""
     instate = getattr(widget, "instate", None)
@@ -138,6 +145,9 @@ class App(tk.Tk):
         self._overview = config.station == OVERVIEW_STATION
         self._station_timings: dict[str, list[dict[str, Any]]] = {}
         self._status_note = ""  # kept in front of the next overview message
+        # Information box of the station view (see _build_information_box).
+        self._info_text: tk.Text | None = None
+        self._info_loading = False
         self.title(f"{APP_NAME} {APP_VERSION} - {config.station}")
         self._setup_platform_style()
         self._setup_list_style()
@@ -480,7 +490,12 @@ class App(tk.Tk):
         settings.pack(side="right", padx=4)
         header_tabs: list[tk.Widget] = []
         if self._overview:
-            # Packed from the right: Upload, Download Start, 3000m, 6000m, Settings.
+            # Packed from the right: Upload, Download Start, 3000m, 6000m,
+            # Edit Information, Settings, Sign out.
+            edit_info = ttk.Button(
+                header, text="Edit Information ...", command=self._edit_information
+            )
+            edit_info.pack(side="right", padx=(4, 0))
             downloads: list[tk.Widget] = []
             for station in reversed(STATIONS):
                 button = ttk.Button(
@@ -494,7 +509,7 @@ class App(tk.Tk):
                 header, text="Upload Race Info ...", command=self._upload_race_info
             )
             upload.pack(side="right", padx=(4, 0))
-            header_tabs = [upload, *downloads]
+            header_tabs = [upload, *downloads, edit_info]
         header_tabs += [settings, sign_out]
 
         self._main_active = True
@@ -537,6 +552,10 @@ class App(tk.Tk):
                 anchor=anchor,
                 stretch=False,
             )
+        # Show the columns of the view at once: with all 13 columns the list
+        # would ask for a very wide window before the first data arrives.
+        show_all = not self._overview and self.config_.show_all_records
+        self._tree.configure(displaycolumns=self._view_columns(show_all))
         scroll = ttk.Scrollbar(self._container, command=self._tree.yview)
         self._tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
@@ -566,11 +585,18 @@ class App(tk.Tk):
         return f"Station: {self.config_.station}"
 
     def _build_record_box(self) -> list[tk.Widget]:
-        """The box to record a time. Returns its widgets in Tab order."""
-        entry_frame = ttk.LabelFrame(
-            self._container, text="Record passing time", padding=8
-        )
-        entry_frame.pack(fill="x", pady=8)
+        """The box to record a time. Returns its widgets in Tab order.
+
+        It shares one row with the information box, split 60 : 40.
+        """
+        row = ttk.Frame(self._container)
+        row.pack(fill="x", pady=8)
+        # uniform: the widths stay strictly 3 : 2, whatever the content needs.
+        row.columnconfigure(0, weight=3, uniform="record_row")
+        row.columnconfigure(1, weight=2, uniform="record_row")
+        entry_frame = ttk.LabelFrame(row, text="Record passing time", padding=8)
+        entry_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        self._build_information_box(row)
         # Packed first so it takes the bottom strip, right aligned.
         self._auto_inc_var = tk.BooleanVar(value=self.config_.auto_increment)
         auto_inc = ttk.Checkbutton(
@@ -944,11 +970,120 @@ class App(tk.Tk):
         self._refresh_race_info()
         self._refresh()
 
+    # ---- information of the Regattaleitung -----------------------------
+
+    def _build_information_box(self, row: ttk.Frame) -> None:
+        """Calm box with standing information, e.g. the phone number of the
+        Regattaleitung (GET /information)."""
+        box = ttk.LabelFrame(row, text="Information", padding=8)
+        box.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        background = ttk.Style(self).lookup("TFrame", "background") or "#f0f0f0"
+        scroll = ttk.Scrollbar(box, orient="vertical")
+        # A read-only Text: it wraps at the actual width. width=1 keeps its
+        # requested width small, so the 60 : 40 split holds. The height is
+        # fixed, a longer text scrolls.
+        text = tk.Text(
+            box,
+            width=1,
+            height=3,
+            wrap="word",
+            font=self._list_font,
+            relief="flat",
+            borderwidth=0,
+            highlightthickness=0,
+            padx=2,
+            pady=0,
+            background=background,
+            cursor="arrow",
+            takefocus=0,
+        )
+        text.pack(side="left", fill="both", expand=True)
+
+        def on_scroll(first: str | float, last: str | float) -> None:
+            # The scrollbar is only shown when the text does not fit.
+            scroll.set(first, last)
+            needed = float(first) > 0 or float(last) < 1
+            if needed and not scroll.winfo_manager():
+                scroll.pack(side="right", fill="y", before=text)
+            elif not needed and scroll.winfo_manager():
+                scroll.pack_forget()
+
+        text.configure(yscrollcommand=on_scroll)
+        scroll.configure(command=text.yview)
+        self._info_text = text
+        self._show_information("")
+
+    def _refresh_information(self) -> None:
+        box = self._info_text
+        if (
+            self._info_loading
+            or not self._auth.signed_in
+            or box is None
+            or not box.winfo_exists()
+        ):
+            return  # no box (Regattaleitung, sign-in screen) or already loading
+        self._info_loading = True
+        self._run_async(
+            self._api.get_information,
+            self._information_loaded,
+            self._information_failed,
+        )
+
+    def _information_loaded(self, data: dict[str, Any]) -> None:
+        self._info_loading = False
+        self._show_information(_information_text(data.get("text", "")))
+
+    def _information_failed(self, _exc: Exception) -> None:
+        # The last text stays and the next pull tries again. No message: the
+        # text rarely changes, and the race info pull reports network errors.
+        self._info_loading = False
+
+    def _show_information(self, text: str) -> None:
+        box = self._info_text
+        if box is None or not box.winfo_exists():
+            return
+        box.configure(state="normal")
+        box.delete("1.0", "end")
+        box.insert("1.0", text)
+        box.configure(state="disabled")
+
+    def _edit_information(self) -> None:
+        """Regattaleitung: load the current text, edit it, save it."""
+        if self._info_loading:
+            return
+        self._info_loading = True
+        self._status.set("Loading the information ...")
+        self._run_async(
+            self._api.get_information,
+            self._information_to_edit,
+            self._information_edit_failed,
+        )
+
+    def _information_to_edit(self, data: dict[str, Any]) -> None:
+        self._info_loading = False
+        self._status.set("")
+        text = _ask_information(self, str(data.get("text", "")))
+        if text is None:
+            return
+        self._status.set("Saving the information ...")
+        self._run_async(
+            lambda: self._api.post_information(text),
+            lambda result: self._status.set(
+                "Information saved." if result.get("text") else "Information removed."
+            ),
+            lambda e: self._file_action_failed("Edit information", e),
+        )
+
+    def _information_edit_failed(self, exc: Exception) -> None:
+        self._info_loading = False
+        self._file_action_failed("Edit information", exc)
+
     def _refresh_race_info(self) -> None:
         """Pull the reference data: the race info, at 3000m and 6000m also the
-        timings of the station before."""
+        timings of the station before, and the information text."""
         if not self._auth.signed_in:
             return
+        self._refresh_information()
         if self._overview:
             self._run_async(
                 self._fetch_overview, self._overview_loaded, self._overview_failed
@@ -1418,14 +1553,7 @@ class App(tk.Tk):
         selected = self._tree.selection()
         self._tree.delete(*self._tree.get_children())
         self._items = {}
-        if self._overview:
-            columns = OVERVIEW_COLUMNS
-        elif show_all:
-            columns = ALL_COLUMNS
-        elif self._upstream_station:
-            columns = DOWNSTREAM_COLUMNS
-        else:
-            columns = NORMAL_COLUMNS
+        columns = self._view_columns(show_all)
         if tuple(self._tree.cget("displaycolumns")) != columns:
             self._tree.configure(displaycolumns=columns)
             self._fit_columns()
@@ -1452,6 +1580,16 @@ class App(tk.Tk):
             self._focus_boat = None
         else:
             self._tree.yview_moveto(top)
+
+    def _view_columns(self, show_all: bool) -> tuple[str, ...]:
+        """The visible columns of the current view."""
+        if self._overview:
+            return OVERVIEW_COLUMNS
+        if show_all:
+            return ALL_COLUMNS
+        if self._upstream_station:
+            return DOWNSTREAM_COLUMNS
+        return NORMAL_COLUMNS
 
     def _fit_columns(self) -> None:
         """Spread the visible columns over the full width of the list.
@@ -1660,6 +1798,71 @@ def _ask_fields(
     dlg.bind("<Escape>", lambda _e: dlg.destroy())
     if first is not None:
         first.focus_set()
+    dlg.grab_set()
+    parent.wait_window(dlg)
+    return result[0] if result else None
+
+
+def _ask_information(parent: tk.Tk, text: str) -> str | None:
+    """Modal dialog to edit the information text. None when cancelled."""
+    dlg = tk.Toplevel(parent)
+    dlg.title("Edit information")
+    dlg.transient(parent)
+    dlg.resizable(False, False)
+    frame = ttk.Frame(dlg, padding=12)
+    frame.pack()
+    ttk.Label(
+        frame,
+        text="Shown to all stations, e.g. the phone number of the Regattaleitung.\n"
+        f"Plain text, up to {INFORMATION_MAX_LENGTH} characters. "
+        "Empty removes it.",
+    ).grid(row=0, column=0, columnspan=2, sticky="w")
+    editor = tk.Text(frame, width=50, height=6, wrap="word", undo=True)
+    editor.grid(row=1, column=0, columnspan=2, pady=6)
+    editor.insert("1.0", text)
+    count = tk.StringVar()
+    counter = ttk.Label(frame, textvariable=count)
+    counter.grid(row=2, column=0, sticky="w")
+
+    def current() -> str:
+        return editor.get("1.0", "end-1c").strip()
+
+    def update_count(_event: tk.Event | None = None) -> None:
+        n = len(current())
+        count.set(f"{n} / {INFORMATION_MAX_LENGTH} characters")
+        counter.configure(foreground="#b00" if n > INFORMATION_MAX_LENGTH else "")
+        editor.edit_modified(False)  # re-arm <<Modified>>
+
+    editor.bind("<<Modified>>", update_count)
+    update_count()
+    result: list[str] = []
+
+    def ok() -> None:
+        value = current()
+        if len(value) > INFORMATION_MAX_LENGTH:
+            dlg.bell()
+            return
+        result.append(value)
+        dlg.destroy()
+
+    buttons = ttk.Frame(frame)
+    buttons.grid(row=3, column=0, columnspan=2, pady=(6, 0))
+    ttk.Button(buttons, text="Save", command=ok).pack(side="left", padx=4)
+    ttk.Button(buttons, text="Cancel", command=dlg.destroy).pack(side="left", padx=4)
+
+    def next_widget(event: tk.Event) -> str:
+        # Tab leaves the text instead of typing a tab character.
+        target = event.widget.tk_focusNext()
+        if target is not None:
+            target.focus_set()
+        return "break"
+
+    editor.bind("<Tab>", next_widget)
+    # Enter makes a new line in the text, Ctrl+Enter saves.
+    dlg.bind("<Control-Return>", lambda _e: ok())
+    dlg.bind("<Escape>", lambda _e: dlg.destroy())
+    editor.focus_set()
+    editor.mark_set("insert", "end-1c")
     dlg.grab_set()
     parent.wait_window(dlg)
     return result[0] if result else None

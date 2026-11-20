@@ -48,16 +48,16 @@ class PendingEntry:
 
 
 ALL_COLUMNS = ("boat", "passed", "recorded", "current", "deleted")
-NORMAL_COLUMNS = ("boat", "planned", "club", "distance", "passed", "recorded")
-# 3000m / 6000m: the boats that passed the station before, then this station.
-DOWNSTREAM_COLUMNS = ("boat", "upstream", "passed", "recorded")
+NORMAL_COLUMNS = ("boat", "club", "distance", "planned", "passed", "recorded")
+# 3000m / 6000m: race info, the station before, then this station.
+DOWNSTREAM_COLUMNS = ("boat", "club", "distance", "upstream", "passed", "recorded")
 # Regattaleitung: race info and the passing time at every station.
 OVERVIEW_COLUMNS = (
     "race",
     "boat",
-    "planned",
     "club",
     "distance",
+    "planned",
     "st_start",
     "st_3000m",
     "st_6000m",
@@ -854,7 +854,8 @@ class App(tk.Tk):
         self._refresh()
 
     def _refresh_race_info(self) -> None:
-        """Pull the reference data: race info at the start, else the station before."""
+        """Pull the reference data: the race info, at 3000m and 6000m also the
+        timings of the station before."""
         if not self._auth.signed_in:
             return
         if self._overview:
@@ -863,11 +864,8 @@ class App(tk.Tk):
             )
             return
         if self._upstream_station:
-            station = self._upstream_station
             self._run_async(
-                lambda: self._api.list_timings(station),
-                self._upstream_loaded,
-                self._race_info_failed,
+                self._fetch_downstream, self._downstream_loaded, self._race_info_failed
             )
             return
         self._run_async(
@@ -896,13 +894,32 @@ class App(tk.Tk):
         self._render_timings()
         self._fresh_view = False
 
-    def _upstream_loaded(self, items: list[dict[str, Any]]) -> None:
-        self._upstream = items
-        boats = sum(1 for i in items if i["current"] and not i.get("deleted"))
-        self._status.set(
+    def _fetch_downstream(self) -> dict[str, Any]:
+        """Timings of the station before and the race info (worker thread).
+
+        The timings of the station before decide which boats to expect, so
+        they must load. The race info only adds club and distance: if it
+        fails, the old race info is kept and the error is reported.
+        """
+        assert self._upstream_station is not None
+        upstream = self._api.list_timings(self._upstream_station)
+        try:
+            return {"upstream": upstream, "race_info": self._api.list_race_info()}
+        except ApiError as exc:
+            return {"upstream": upstream, "race_info": None, "race_error": exc}
+
+    def _downstream_loaded(self, data: dict[str, Any]) -> None:
+        self._upstream = data["upstream"]
+        if data["race_info"] is not None:
+            self._race_info = data["race_info"]
+        boats = sum(1 for i in self._upstream if i["current"] and not i.get("deleted"))
+        message = (
             f"{self._upstream_label} timings updated at "
             f"{self._now().strftime('%H:%M:%S')}: {boats} boats."
         )
+        if data.get("race_error"):
+            message += f" Race info failed: {data['race_error']}"
+        self._status.set(message)
         self._render_timings()
         self._fresh_view = False
 
@@ -1119,6 +1136,21 @@ class App(tk.Tk):
             for i in self._upstream
             if i["current"] and not i.get("deleted") and i.get("passed_at")
         }
+        # Race info by boat, for club and distance. A boat listed in several
+        # races gets the one with the earliest planned start.
+        races: dict[int, dict[str, Any]] = {}
+        for race in sorted(
+            (r for r in self._race_info if not r.get("deleted")),
+            key=lambda r: _parse_planned(r.get("planned_start")) or time.max,
+        ):
+            races.setdefault(race["boat_number"], race)
+
+        def values_for(boat: int, item: dict[str, Any] | None) -> list[Any]:
+            values = list(self._current_values(boat, races.get(boat), item, None))
+            if races and boat not in races:
+                values[2] = "(not in race info)"  # column "club"
+            return values
+
         if not before:
             # Nothing known about the station before (not loaded yet or failed).
             rows = []
@@ -1127,9 +1159,7 @@ class App(tk.Tk):
             ):
                 iid = f"{boat}:{item['entry_id']}"
                 self._items[iid] = item
-                rows.append(
-                    Row(iid, boat, self._current_values(boat, None, item, None))
-                )
+                rows.append(Row(iid, boat, tuple(values_for(boat, item))))
             return rows
 
         def passed_dt(item: dict[str, Any]) -> datetime:
@@ -1139,7 +1169,7 @@ class App(tk.Tk):
         passed_here: dict[int, datetime] = {}  # boat -> passing time at this station
         for boat, up in sorted(before.items(), key=lambda b: (passed_dt(b[1]), b[0])):
             item = current.get(boat)
-            values = list(self._current_values(boat, None, item, None))
+            values = values_for(boat, item)
             values.append(self._fmt(up["passed_at"]))  # column "upstream"
             if item:
                 iid = f"{boat}:{item['entry_id']}"
@@ -1155,7 +1185,7 @@ class App(tk.Tk):
             boat = item["boat_number"]
             iid = f"{boat}:{item['entry_id']}"
             self._items[iid] = item
-            values = list(self._current_values(boat, None, item, None))
+            values = values_for(boat, item)
             values.append(f"(not at {self._upstream_label})")
             earlier = [
                 (when, n)

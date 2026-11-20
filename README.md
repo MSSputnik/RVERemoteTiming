@@ -55,7 +55,7 @@ Optional:
   "Auto increment" checkbox. The app writes it back when you toggle the
   checkbox.
 - `race_info_interval_minutes`: how often the race info (at `3000m` and
-  `6000m`: the timings of the station before) is pulled automatically.
+  `6000m` also the timings of the station before) is pulled automatically.
   Default `5`, `0` turns the automatic pull off. The "Settings ..." button of
   the main window changes it, and the new interval applies at once.
 - `show_all_records`: `true` or `false` (default). State of the "Show all
@@ -96,15 +96,17 @@ and the username cleared, then you fill in the rest.
    - The list scrolls so that the boat you just recorded, edited or deleted
      is visible with the 5 boats before it. After a start or "Refresh" it
      scrolls to the first boat whose planned start is not yet over.
-   - The race info (or the timings of the station before) is pulled at
+   - The race info (and the timings of the station before) is pulled at
      start, on "Refresh" and every
      `race_info_interval_minutes` minutes. The scroll position stays as it is
      on the automatic pull.
    - At the stations `3000m` and `6000m` the list shows which boats to
-     expect instead of the race info. At `3000m` these are the boats that
-     passed the `start`, at `6000m` the boats that passed `3000m`, in the
-     order they passed there (columns Boat, "Start passed" or "3000m passed",
-     Passed at, Recorded at). The race info is not used. Boats that did not
+     expect. At `3000m` these are the boats that passed the `start`, at
+     `6000m` the boats that passed `3000m`, in the order they passed there
+     (columns Boat, Club, Distance, "Start passed" or "3000m passed",
+     Passed at, Recorded at). Club and distance come from the race info;
+     boats missing there show "(not in race info)". If the race info cannot
+     be loaded, the last one is kept and the error is shown. Boats that did not
      pass your station yet have empty time columns, and the list scrolls to
      the first of them. Boats you recorded that are missing at the station
      before are highlighted and shown behind the boat that passed your
@@ -136,7 +138,7 @@ station. There is no record box, and times cannot be edited, deleted or
 restored. The window opens large and the list uses a larger font.
 
 The list shows every boat of the race info, ordered by planned start, with
-the columns Race, Boat, Planned start, Club, Distance and the current passing
+the columns Race, Boat, Club, Distance, Planned start and the current passing
 time at Start, 3000m and 6000m. An empty cell means the boat has not passed
 that station yet, `(deleted)` means its current entry there is a delete
 marker. Boats that passed 6000m are shown in grey. Boats with a timing that

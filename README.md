@@ -84,7 +84,16 @@ and the username cleared, then you fill in the rest.
 2. Type a boat number and press Enter, the `s` key or click "Record now (s)".
    The current time is sent as the passing time to the configured station.
    The arrow buttons next to the field, or the Up and Down keys, change the
-   boat number by one without recording it.
+   boat number by one without recording it. The Tab key moves from the boat
+   number to "Record now", "Auto increment", "Show all records", "Restore"
+   (when shown), "Edit time", "Delete" and "Refresh", then to the buttons at
+   the top ("Settings", "Sign out") and back to the boat number. Shift+Tab
+   goes the other way.
+   One-letter shortcuts work anywhere in the station view, also in the boat
+   number field (the letter is not typed there): `s` records, `i` switches
+   "Auto increment", `e` edits the time of the selected entry and `d`
+   deletes it (after a confirmation: Enter confirms, ESC cancels). The
+   letter is underlined on the button. Upper case works too.
 3. The table lists every boat of the race info, ordered by planned start, with
    the club, the distance and the current passing and recording time. Boats
    without a timing (or whose current entry is a delete marker) have empty

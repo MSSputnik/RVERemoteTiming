@@ -116,6 +116,12 @@ def _arrow_image(up: bool, width: int = 15, height: int = 9) -> tk.PhotoImage:
     return image
 
 
+def _disabled(widget: tk.Widget) -> bool:
+    """True for a disabled ttk widget (other widgets are never disabled here)."""
+    instate = getattr(widget, "instate", None)
+    return bool(instate and instate(["disabled"]))
+
+
 def _parse_planned(value: Any) -> time | None:
     """Parse the planned start (time of day, e.g. 11:02:00) of the race info."""
     try:
@@ -150,8 +156,21 @@ class App(tk.Tk):
         self._main_active = False
         self.bind("<Up>", self._key_up)
         self.bind("<Down>", self._key_down)
-        self.bind("<s>", self._key_s)
-        self.bind("<S>", self._key_s)
+        # One-letter shortcuts of the station view, lower and upper case.
+        self._shortcuts: dict[str, Callable[[], None]] = {
+            "s": self._record,
+            "i": self._flip_auto_increment,
+            "e": self._edit_selected,
+            "d": self._delete_selected,
+        }
+        for letter, action in self._shortcuts.items():
+            for key in (f"<{letter}>", f"<{letter.upper()}>"):
+                self.bind(key, lambda _e, a=action: self._shortcut(a))
+        # Own Tab order in the main view (see _tab_move); dialogs and the
+        # sign-in screen keep the default order of Tk.
+        self._tab_chain: list[tk.Widget] = []
+        self.bind("<Tab>", lambda e: self._tab_move(e, 1))
+        self.bind("<<PrevWindow>>", lambda e: self._tab_move(e, -1))
         self._build_clients()
         self._pending: deque[PendingEntry] = deque()
         self._results: queue.Queue[Callable[[], None]] = queue.Queue()
@@ -292,6 +311,7 @@ class App(tk.Tk):
 
     def _clear(self) -> None:
         self._main_active = False
+        self._tab_chain = []
         for child in self._container.winfo_children():
             child.destroy()
 
@@ -454,28 +474,37 @@ class App(tk.Tk):
             header,
             text=f"{self._where()}    User: {me['username']} ({groups})",
         ).pack(side="left")
-        ttk.Button(header, text="Sign out", command=self._sign_out).pack(side="right")
-        ttk.Button(header, text="Settings ...", command=self._edit_settings).pack(
-            side="right", padx=4
-        )
+        sign_out = ttk.Button(header, text="Sign out", command=self._sign_out)
+        sign_out.pack(side="right")
+        settings = ttk.Button(header, text="Settings ...", command=self._edit_settings)
+        settings.pack(side="right", padx=4)
+        header_tabs: list[tk.Widget] = []
         if self._overview:
             # Packed from the right: Upload, Download Start, 3000m, 6000m, Settings.
+            downloads: list[tk.Widget] = []
             for station in reversed(STATIONS):
-                ttk.Button(
+                button = ttk.Button(
                     header,
                     text=f"Download {station.capitalize()} ...",
                     command=lambda s=station: self._download_export(s),
-                ).pack(side="right", padx=(4, 0))
-            ttk.Button(
+                )
+                button.pack(side="right", padx=(4, 0))
+                downloads.insert(0, button)
+            upload = ttk.Button(
                 header, text="Upload Race Info ...", command=self._upload_race_info
-            ).pack(side="right", padx=(4, 0))
+            )
+            upload.pack(side="right", padx=(4, 0))
+            header_tabs = [upload, *downloads]
+        header_tabs += [settings, sign_out]
 
         self._main_active = True
         if self._overview:
-            self._build_overview_bar()
+            body_tabs = self._build_overview_bar()
         else:
-            self._build_record_box()
-            self._build_bar()
+            body_tabs = self._build_record_box() + self._build_bar()
+        # Tab order: the record box, the bar above the list, then the header
+        # from left to right, and back to the boat number.
+        self._tab_chain = body_tabs + header_tabs
 
         # All columns exist; render switches the visible ones per view mode.
         cols = TREE_COLUMNS
@@ -536,19 +565,22 @@ class App(tk.Tk):
             return "Regattaleitung"
         return f"Station: {self.config_.station}"
 
-    def _build_record_box(self) -> None:
+    def _build_record_box(self) -> list[tk.Widget]:
+        """The box to record a time. Returns its widgets in Tab order."""
         entry_frame = ttk.LabelFrame(
             self._container, text="Record passing time", padding=8
         )
         entry_frame.pack(fill="x", pady=8)
         # Packed first so it takes the bottom strip, right aligned.
         self._auto_inc_var = tk.BooleanVar(value=self.config_.auto_increment)
-        ttk.Checkbutton(
+        auto_inc = ttk.Checkbutton(
             entry_frame,
             text="Auto increment",
+            underline=5,  # the "i", shortcut i
             variable=self._auto_inc_var,
             command=self._toggle_auto_increment,
-        ).pack(side="bottom", anchor="e")
+        )
+        auto_inc.pack(side="bottom", anchor="e")
         ttk.Label(entry_frame, text="Boat number").pack(side="left")
         self._boat_var = tk.StringVar()
         # Large number; fill="y" stretches the field to the height of the
@@ -562,49 +594,58 @@ class App(tk.Tk):
         )
         boat.pack(side="left", padx=6, fill="y")
         boat.bind("<Return>", lambda _e: self._record())
-        # The entry would insert the typed letter, so handle s here and stop it.
-        for key in ("<s>", "<S>"):
-            boat.bind(key, lambda _e: self._record_key())
+        # The entry would insert the typed letter, so the shortcuts are handled
+        # here and the key is stopped ("break").
+        for letter, action in self._shortcuts.items():
+            for key in (f"<{letter}>", f"<{letter.upper()}>"):
+                boat.bind(key, lambda _e, a=action: self._shortcut(a) or "break")
         boat.focus_set()
         arrows = ttk.Frame(entry_frame)
         arrows.pack(side="left", padx=(0, 6))
         self._arrow_button(arrows, True, lambda: self._step_boat(1)).pack()
         self._arrow_button(arrows, False, lambda: self._step_boat(-1)).pack()
-        ttk.Button(entry_frame, text="Record now (s)", command=self._record).pack(
-            side="left"
-        )
+        record = ttk.Button(entry_frame, text="Record now (s)", command=self._record)
+        record.pack(side="left")
         self._main_active = True
         self._pending_var = tk.StringVar()
         ttk.Label(entry_frame, textvariable=self._pending_var, foreground="#b00").pack(
             side="right"
         )
+        # The arrow buttons are left out: the Up and Down keys do the same.
+        return [boat, record, auto_inc]
 
-    def _build_bar(self) -> None:
+    def _build_bar(self) -> list[tk.Widget]:
+        """The bar above the list. Returns its widgets in Tab order."""
         bar = ttk.Frame(self._container)
         bar.pack(fill="x")
         ttk.Label(bar, text="Recorded timings").pack(side="left")
         self._show_all_var = tk.BooleanVar(value=self.config_.show_all_records)
-        ttk.Checkbutton(
+        show_all = ttk.Checkbutton(
             bar,
             text="Show all records",
             variable=self._show_all_var,
             command=self._toggle_show_all,
-        ).pack(side="left", padx=12)
-        ttk.Button(bar, text="Refresh", command=self._refresh_clicked).pack(
-            side="right"
         )
-        ttk.Button(bar, text="Delete", command=self._delete_selected).pack(
-            side="right", padx=4
+        show_all.pack(side="left", padx=12)
+        refresh = ttk.Button(bar, text="Refresh", command=self._refresh_clicked)
+        refresh.pack(side="right")
+        delete = ttk.Button(
+            bar, text="Delete", underline=0, command=self._delete_selected
         )
-        ttk.Button(bar, text="Edit time ...", command=self._edit_selected).pack(
-            side="right"
+        delete.pack(side="right", padx=4)
+        edit = ttk.Button(
+            bar, text="Edit time ...", underline=0, command=self._edit_selected
         )
+        edit.pack(side="right")
         # Only shown in the "Show all records" view, see _update_restore_button.
+        # While hidden, _tab_move skips it.
         self._restore_btn = ttk.Button(
             bar, text="Restore", command=self._restore_selected
         )
+        return [show_all, self._restore_btn, edit, delete, refresh]
 
-    def _build_overview_bar(self) -> None:
+    def _build_overview_bar(self) -> list[tk.Widget]:
+        """The bar above the overview list. Returns its widgets in Tab order."""
         bar = ttk.Frame(self._container)
         bar.pack(fill="x", pady=(8, 0))
         ttk.Label(bar, text="Overview of all stations").pack(side="left")
@@ -613,9 +654,9 @@ class App(tk.Tk):
             text="yellow: not in race info    grey: passed 6000m",
             foreground="#666",
         ).pack(side="left", padx=12)
-        ttk.Button(bar, text="Refresh", command=self._refresh_clicked).pack(
-            side="right"
-        )
+        refresh = ttk.Button(bar, text="Refresh", command=self._refresh_clicked)
+        refresh.pack(side="right")
+        return [refresh]
 
     def _edit_settings(self) -> None:
         """Dialog for the timezone and the race info interval."""
@@ -657,17 +698,43 @@ class App(tk.Tk):
         if self._recording() and self.focus_get() is not self._tree:
             self._step_boat(-1)
 
+    def _tab_move(self, event: tk.Event, step: int) -> str | None:
+        """Move the focus along _tab_chain (Tab: step 1, Shift+Tab: step -1).
+
+        Hidden or disabled widgets are skipped. From a widget outside the
+        chain (e.g. the list) Tab goes to the start of the chain. Without a
+        chain (sign-in screen) Tk handles the key as usual.
+        """
+        chain = [
+            w
+            for w in self._tab_chain
+            if w.winfo_exists() and w.winfo_ismapped() and not _disabled(w)
+        ]
+        if not chain:
+            return None
+        names = [str(w) for w in chain]
+        current = str(event.widget)
+        if current in names:
+            target = chain[(names.index(current) + step) % len(chain)]
+        else:
+            target = chain[0] if step > 0 else chain[-1]
+        # Same as Tk: focus the widget and select the text of an entry.
+        self.tk.call("tk::TabToWindow", str(target))
+        return "break"
+
     def _recording(self) -> bool:
         """True while the main view with the record box is shown."""
         return self._main_active and not self._overview
 
-    def _key_s(self, _event: tk.Event) -> None:
+    def _shortcut(self, action: Callable[[], None]) -> None:
+        """Run a one-letter shortcut, only in the station view."""
         if self._recording():
-            self._record()
+            action()
 
-    def _record_key(self) -> str:
-        self._record()
-        return "break"
+    def _flip_auto_increment(self) -> None:
+        """Shortcut i: switch "Auto increment" on or off."""
+        self._auto_inc_var.set(not self._auto_inc_var.get())
+        self._toggle_auto_increment()
 
     def _step_boat(self, delta: int) -> None:
         """Change the boat number without recording it."""
@@ -954,7 +1021,9 @@ class App(tk.Tk):
         except OSError as exc:
             messagebox.showerror("Upload race info", f"Cannot read the file:\n{exc}")
             return
-        if not messagebox.askyesno(
+        # OK/Cancel instead of Yes/No: Windows only closes a box with a
+        # Cancel button on ESC. Enter presses OK.
+        if not messagebox.askokcancel(
             "Upload race info",
             f"Upload {Path(path).name}?\n\n"
             "It replaces the race info. Boats that are missing in the file are "
@@ -1449,7 +1518,9 @@ class App(tk.Tk):
         if item.get("deleted") and item["current"]:
             self._status.set(f"Boat {boat} is already deleted.")
             return
-        if not messagebox.askyesno(
+        # OK/Cancel instead of Yes/No: Windows only closes a box with a
+        # Cancel button on ESC. Enter presses OK.
+        if not messagebox.askokcancel(
             "Delete timing", f"Mark boat {boat} as deleted?", parent=self
         ):
             return

@@ -48,8 +48,9 @@ Optional:
   is increased by one after each "Record now". It is the start value of the
   "Auto increment" checkbox. The app writes it back when you toggle the
   checkbox.
-- `race_info_interval_minutes`: how often the race info is pulled
-  automatically. Default `5`, `0` turns the automatic pull off.
+- `race_info_interval_minutes`: how often the race info (at `3000m` and
+  `6000m`: the timings of the station before) is pulled automatically.
+  Default `5`, `0` turns the automatic pull off.
 - `show_all_records`: `true` or `false` (default). State of the "Show all
   records" checkbox. The app writes it back when you toggle the checkbox.
 
@@ -77,9 +78,19 @@ uv run python -m rve_timing
    - The list scrolls so that the boat you just recorded, edited or deleted
      is visible with the 5 boats before it. After a start or "Refresh" it
      scrolls to the first boat whose planned start is not yet over.
-   - The race info is pulled at start, on "Refresh" and every
+   - The race info (or the timings of the station before) is pulled at
+     start, on "Refresh" and every
      `race_info_interval_minutes` minutes. The scroll position stays as it is
      on the automatic pull.
+   - At the stations `3000m` and `6000m` the list shows which boats to
+     expect instead of the race info. At `3000m` these are the boats that
+     passed the `start`, at `6000m` the boats that passed `3000m`, in the
+     order they passed there (columns Boat, "Start passed" or "3000m passed",
+     Passed at, Recorded at). The race info is not used. Boats that did not
+     pass your station yet have empty time columns, and the list scrolls to
+     the first of them. Boats you recorded that are missing at the station
+     before are highlighted and shown behind the boat that passed your
+     station last before them. No offset between the stations is calculated.
    - Tick "Show all records" to see every entry instead, including
      corrections and delete markers (greyed out). The columns change to Boat,
      Passed at, Recorded at, Current and Deleted, and the race info is not

@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from .api import ApiClient, ApiError
 from .auth import AuthUnavailable, CognitoAuth
 from .config import (
+    UPSTREAM_STATION,
     Config,
     ConfigError,
     save_auto_increment,
@@ -42,6 +43,8 @@ class PendingEntry:
 
 ALL_COLUMNS = ("boat", "passed", "recorded", "current", "deleted")
 NORMAL_COLUMNS = ("boat", "planned", "club", "distance", "passed", "recorded")
+# 3000m / 6000m: the boats that passed the station before, then this station.
+DOWNSTREAM_COLUMNS = ("boat", "upstream", "passed", "recorded")
 IS_LINUX = sys.platform.startswith("linux")
 ROWS_BEFORE_FOCUS = 5  # rows shown above the boat in focus
 
@@ -64,6 +67,7 @@ class Row:
     planned: time | None = None  # planned start; stand-in time for unknown boats
     tags: tuple[str, ...] = ()
     unknown: bool = False  # timing of a boat that is not in the race info
+    waiting: bool = False  # expected here (passed the station before), no timing yet
 
 
 def _arrow_image(up: bool, width: int = 15, height: int = 9) -> tk.PhotoImage:
@@ -111,6 +115,13 @@ class App(tk.Tk):
         self._sending = False
         self._arrow_images: list[tk.PhotoImage] = []
         self._race_info: list[dict[str, Any]] = []
+        # 3000m and 6000m show the boats of the station before instead of the
+        # race info: start -> 3000m -> 6000m.
+        self._upstream_station = UPSTREAM_STATION.get(config.station)
+        self._upstream: list[dict[str, Any]] = []
+        self._upstream_label = (
+            self._upstream_station.capitalize() if self._upstream_station else ""
+        )
         self._focus_boat: int | None = None  # boat to scroll to on next render
         self._fresh_view = True  # scroll to the boats due now on next render
 
@@ -396,6 +407,7 @@ class App(tk.Tk):
             "recorded",
             "current",
             "deleted",
+            "upstream",
         )
         self._tree = ttk.Treeview(
             self._container, columns=cols, show="headings", height=16
@@ -409,6 +421,7 @@ class App(tk.Tk):
             ("recorded", "Recorded at", 110),
             ("current", "Current", 70),
             ("deleted", "Deleted", 70),
+            ("upstream", f"{self._upstream_label} passed", 120),
         ):
             self._tree.heading(col, text=title)
             self._tree.column(col, width=int(width * self._font_scale), anchor="center")
@@ -644,11 +657,30 @@ class App(tk.Tk):
         self._refresh()
 
     def _refresh_race_info(self) -> None:
+        """Pull the reference data: race info at the start, else the station before."""
         if not self._auth.signed_in:
+            return
+        if self._upstream_station:
+            station = self._upstream_station
+            self._run_async(
+                lambda: self._api.list_timings(station),
+                self._upstream_loaded,
+                self._race_info_failed,
+            )
             return
         self._run_async(
             self._api.list_race_info, self._race_info_loaded, self._race_info_failed
         )
+
+    def _upstream_loaded(self, items: list[dict[str, Any]]) -> None:
+        self._upstream = items
+        boats = sum(1 for i in items if i["current"] and not i.get("deleted"))
+        self._status.set(
+            f"{self._upstream_label} timings updated at "
+            f"{self._now().strftime('%H:%M:%S')}: {boats} boats."
+        )
+        self._render_timings()
+        self._fresh_view = False
 
     def _race_info_loaded(self, items: list[dict[str, Any]]) -> None:
         self._race_info = items
@@ -660,7 +692,10 @@ class App(tk.Tk):
         self._fresh_view = False
 
     def _race_info_failed(self, exc: Exception) -> None:
-        self._status.set(f"Race info failed: {exc}")
+        what = (
+            f"{self._upstream_label} timings" if self._upstream_station else "Race info"
+        )
+        self._status.set(f"{what} failed: {exc}")
         self._render_timings()
         self._fresh_view = False
 
@@ -698,6 +733,8 @@ class App(tk.Tk):
 
     def _rows_current(self) -> list[Row]:
         """Race info joined with the current timing of each boat."""
+        if self._upstream_station:
+            return self._rows_downstream()
         current = {
             i["boat_number"]: i
             for i in self._all_items
@@ -759,6 +796,70 @@ class App(tk.Tk):
         except (KeyError, TypeError, ValueError):
             return None
 
+    def _rows_downstream(self) -> list[Row]:
+        """3000m / 6000m: boats in the order they passed the station before.
+
+        Boats that did not pass this station yet are the ones to expect. No
+        offset is calculated, the order of the station before is the schedule.
+        """
+        current = {
+            i["boat_number"]: i
+            for i in self._all_items
+            if i["current"] and not i.get("deleted") and i.get("passed_at")
+        }
+        before = {
+            i["boat_number"]: i
+            for i in self._upstream
+            if i["current"] and not i.get("deleted") and i.get("passed_at")
+        }
+        if not before:
+            # Nothing known about the station before (not loaded yet or failed).
+            rows = []
+            for boat, item in sorted(
+                current.items(), key=lambda b: b[1]["recorded_at"], reverse=True
+            ):
+                iid = f"{boat}:{item['entry_id']}"
+                self._items[iid] = item
+                rows.append(
+                    Row(iid, boat, self._current_values(boat, None, item, None))
+                )
+            return rows
+
+        def passed_dt(item: dict[str, Any]) -> datetime:
+            return datetime.fromisoformat(item["passed_at"])
+
+        rows = []
+        passed_here: dict[int, datetime] = {}  # boat -> passing time at this station
+        for boat, up in sorted(before.items(), key=lambda b: (passed_dt(b[1]), b[0])):
+            item = current.get(boat)
+            values = list(self._current_values(boat, None, item, None))
+            values.append(self._fmt(up["passed_at"]))  # column "upstream"
+            if item:
+                iid = f"{boat}:{item['entry_id']}"
+                self._items[iid] = item
+                passed_here[boat] = passed_dt(item)
+            else:
+                iid = f"wait:{boat}"
+            rows.append(Row(iid, boat, tuple(values), waiting=item is None))
+        # Boats with a timing here that did not pass the station before: put
+        # them right behind the boat that passed this station last before them.
+        extras = [i for b, i in current.items() if b not in before]
+        for item in sorted(extras, key=lambda i: (passed_dt(i), i["boat_number"])):
+            boat = item["boat_number"]
+            iid = f"{boat}:{item['entry_id']}"
+            self._items[iid] = item
+            values = list(self._current_values(boat, None, item, None))
+            values.append(f"(not at {self._upstream_label})")
+            earlier = [
+                (when, n)
+                for n, r in enumerate(rows)
+                if (when := passed_here.get(r.boat)) and when <= passed_dt(item)
+            ]
+            at = max(earlier)[1] + 1 if earlier else 0
+            rows.insert(at, Row(iid, boat, tuple(values), unknown=True))
+            passed_here[boat] = passed_dt(item)
+        return rows
+
     def _current_values(
         self,
         boat: int,
@@ -787,7 +888,13 @@ class App(tk.Tk):
         selected = self._tree.selection()
         self._tree.delete(*self._tree.get_children())
         self._items = {}
-        self._tree.configure(displaycolumns=ALL_COLUMNS if show_all else NORMAL_COLUMNS)
+        if show_all:
+            columns = ALL_COLUMNS
+        elif self._upstream_station:
+            columns = DOWNSTREAM_COLUMNS
+        else:
+            columns = NORMAL_COLUMNS
+        self._tree.configure(displaycolumns=columns)
         rows = self._rows_all() if show_all else self._rows_current()
         shown = []
         for row in rows:
@@ -822,6 +929,12 @@ class App(tk.Tk):
             for n, row in enumerate(rows):
                 if row.boat == self._focus_boat:
                     return n
+        if self._upstream_station:
+            # First boat to expect here, i.e. not passed this station yet.
+            for n, row in enumerate(rows):
+                if row.waiting:
+                    return n
+            return len(rows) - 1
         now = self._now().time()
         planned = [(n, r.planned) for n, r in enumerate(rows) if r.planned]
         for n, start in planned:

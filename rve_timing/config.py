@@ -8,6 +8,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 STATIONS = ("start", "3000m", "6000m")
+# The station whose passing times show which boats to expect.
+UPSTREAM_STATION = {"3000m": "start", "6000m": "3000m"}
 DEFAULT_CONFIG_PATH = Path("config.json")
 CONFIG_ENV_VAR = "RVE_TIMING_CONFIG"
 

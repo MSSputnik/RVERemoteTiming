@@ -3,7 +3,7 @@
 import base64
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -53,6 +53,8 @@ class Config:
     show_all_records: bool = False
     race_info_interval_minutes: int = 5  # 0 disables the automatic pull
     refresh_token: str = ""  # decoded; empty when login is not remembered
+    # Last file used per upload/download button, e.g. {"download_start": "..."}.
+    last_files: dict[str, str] = field(default_factory=dict)
 
 
 def config_path() -> Path:
@@ -107,6 +109,11 @@ def load_config(path: Path | None = None) -> Config:
     ):
         raise ConfigError("race_info_interval_minutes must be an integer >= 0.")
 
+    last_files = raw.get("last_files", {})
+    if not isinstance(last_files, dict):
+        last_files = {}
+    last_files = {str(k): str(v) for k, v in last_files.items() if isinstance(v, str)}
+
     refresh_token = ""
     if raw.get(REFRESH_TOKEN_KEY):
         try:
@@ -125,6 +132,7 @@ def load_config(path: Path | None = None) -> Config:
         show_all_records=show_all_records,
         race_info_interval_minutes=race_info_interval_minutes,
         refresh_token=refresh_token,
+        last_files=last_files,
     )
 
 
@@ -152,6 +160,11 @@ def save_display_settings(
         },
         path,
     )
+
+
+def save_last_files(last_files: dict[str, str], path: Path | None = None) -> None:
+    """Store the last used file of every upload/download button."""
+    _update_config("last_files", dict(last_files), path)
 
 
 def save_auto_increment(value: bool, path: Path | None = None) -> None:

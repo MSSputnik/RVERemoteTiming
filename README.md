@@ -149,6 +149,22 @@ The race info and the timings of all three stations are pulled at sign-in, on
 "Refresh" and every `race_info_interval_minutes` minutes. The user needs the
 group `Regattaleitung` (or `Admin`), which may read all of them.
 
+The buttons next to "Settings ..." handle the files of the Regattaleitung:
+
+- "Upload Race Info ..." asks for a CSV file (semicolon separated, header
+  `boat_number;planned_start;club;race_number;race_name;distance`) and sends
+  it to `PUT /race-info` after a confirmation. Boats missing in the file are
+  marked as deleted by the backend. If one row is invalid, nothing is
+  written and the error names the row.
+- "Download Start ...", "Download 3000m ..." and "Download 6000m ..." ask
+  where to save and write the export of that station (`GET /exports/<station>`)
+  in `trz` format, with the times in the configured timezone. The file is
+  saved as sent, with CRLF line endings.
+
+Each button remembers the last file it used in `config.json` (`last_files`)
+and preselects it next time. The first time the names are `race-info.csv`,
+`start.trz`, `3000m.trz` and `6000m.trz`.
+
 ## Remember login
 
 Tick "Remember login" on the sign-in screen to skip the credentials next

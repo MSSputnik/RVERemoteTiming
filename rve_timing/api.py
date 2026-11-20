@@ -23,7 +23,13 @@ class ApiClient:
         self._auth = auth
         self._session = requests.Session()
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> requests.Response:
+    def _request(
+        self,
+        method: str,
+        path: str,
+        headers_extra: dict[str, str] | None = None,
+        **kwargs: Any,
+    ) -> requests.Response:
         for attempt in (1, 2):
             try:
                 token = self._auth.get_id_token()
@@ -33,7 +39,10 @@ class ApiClient:
                 resp = self._session.request(
                     method,
                     self._base_url + path,
-                    headers={"Authorization": f"Bearer {token}"},
+                    headers={
+                        "Authorization": f"Bearer {token}",
+                        **(headers_extra or {}),
+                    },
                     timeout=TIMEOUT,
                     **kwargs,
                 )
@@ -89,6 +98,24 @@ class ApiClient:
         if deleted:
             body["deleted"] = True
         return self._request("POST", f"/timings/{station}", json=body).json()
+
+    def put_race_info(self, csv_data: bytes) -> dict[str, Any]:
+        """Upload the race CSV (semicolon separated). Returns uploaded/deleted."""
+        return self._request(
+            "PUT",
+            "/race-info",
+            data=csv_data,
+            headers_extra={"Content-Type": "text/csv"},
+        ).json()
+
+    def export(
+        self, station: str, fmt: str = "trz", tz: str = "Europe/Berlin"
+    ) -> bytes:
+        """Current value per boat of a station as file content (trz or csv)."""
+        resp = self._request(
+            "GET", f"/exports/{station}", params={"format": fmt, "tz": tz}
+        )
+        return resp.content
 
     def list_race_info(self, include_deleted: bool = False) -> list[dict[str, Any]]:
         params = {"includeDeleted": "true"} if include_deleted else None

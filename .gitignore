@@ -13,7 +13,10 @@ infra/build/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
-config*.json
-!config.example.json
 # Agent working notes
 .agents/
+# Program
+config*.json
+!config.example.json
+*.trz
+*.csv

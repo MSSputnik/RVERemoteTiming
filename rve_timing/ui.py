@@ -11,8 +11,9 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, time
+from pathlib import Path
 from time import monotonic
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -26,6 +27,7 @@ from .config import (
     ConfigError,
     save_auto_increment,
     save_display_settings,
+    save_last_files,
     save_login_parameters,
     save_refresh_token,
     save_show_all_records,
@@ -129,6 +131,7 @@ class App(tk.Tk):
         # The Regattaleitung has no station: it only watches and does not record.
         self._overview = config.station == OVERVIEW_STATION
         self._station_timings: dict[str, list[dict[str, Any]]] = {}
+        self._status_note = ""  # kept in front of the next overview message
         self.title(f"{APP_NAME} {APP_VERSION} - {config.station}")
         self._setup_platform_style()
         self._setup_list_style()
@@ -455,6 +458,17 @@ class App(tk.Tk):
         ttk.Button(header, text="Settings ...", command=self._edit_settings).pack(
             side="right", padx=4
         )
+        if self._overview:
+            # Packed from the right: Upload, Download Start, 3000m, 6000m, Settings.
+            for station in reversed(STATIONS):
+                ttk.Button(
+                    header,
+                    text=f"Download {station.capitalize()} ...",
+                    command=lambda s=station: self._download_export(s),
+                ).pack(side="right", padx=(4, 0))
+            ttk.Button(
+                header, text="Upload Race Info ...", command=self._upload_race_info
+            ).pack(side="right", padx=(4, 0))
 
         self._main_active = True
         if self._overview:
@@ -883,11 +897,110 @@ class App(tk.Tk):
         self._race_info = data["race_info"]
         self._station_timings = data["timings"]
         boats = sum(1 for r in self._race_info if not r.get("deleted"))
-        self._status.set(
+        message = (
             f"Overview updated at {self._now().strftime('%H:%M:%S')}: {boats} boats."
         )
+        if self._status_note:
+            message = f"{self._status_note} {message}"
+            self._status_note = ""
+        self._status.set(message)
         self._render_timings()
         self._fresh_view = False
+
+    # ---- Regattaleitung: upload and download ----------------------------
+
+    def _last_file(self, key: str, default_name: str) -> tuple[str, str]:
+        """Directory and file name to preselect in the file dialog."""
+        last = self.config_.last_files.get(key)
+        if last:
+            path = Path(last)
+            return str(path.parent), path.name
+        return str(Path.cwd()), default_name
+
+    def _remember_file(self, key: str, path: str) -> None:
+        files = {**self.config_.last_files, key: path}
+        try:
+            save_last_files(files)
+        except ConfigError as exc:
+            self._status.set(f"Cannot save the file name: {exc}")
+            return
+        self.config_ = replace(self.config_, last_files=files)
+
+    def _upload_race_info(self) -> None:
+        key = "upload_race_info"
+        folder, name = self._last_file(key, "race-info.csv")
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Upload race info",
+            initialdir=folder,
+            initialfile=name,
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        self._remember_file(key, path)
+        try:
+            data = Path(path).read_bytes()
+        except OSError as exc:
+            messagebox.showerror("Upload race info", f"Cannot read the file:\n{exc}")
+            return
+        if not messagebox.askyesno(
+            "Upload race info",
+            f"Upload {Path(path).name}?\n\n"
+            "It replaces the race info. Boats that are missing in the file are "
+            "marked as deleted.",
+            parent=self,
+        ):
+            return
+        self._status.set(f"Uploading {Path(path).name} ...")
+        self._run_async(
+            lambda: self._api.put_race_info(data),
+            self._race_info_uploaded,
+            lambda e: self._file_action_failed("Upload race info", e),
+        )
+
+    def _race_info_uploaded(self, result: dict[str, Any]) -> None:
+        message = (
+            f"Race info uploaded: {result.get('uploaded', 0)} boats, "
+            f"{result.get('deleted', 0)} marked as deleted."
+        )
+        self._status.set(message)
+        # Shown again in front of the refresh message, which would hide it.
+        self._status_note = message
+        self._refresh_race_info()
+
+    def _download_export(self, station: str) -> None:
+        key = f"download_{station}"
+        folder, name = self._last_file(key, f"{station}.trz")
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title=f"Download {station}",
+            initialdir=folder,
+            initialfile=name,
+            defaultextension=".trz",
+            filetypes=[("TRZ files", "*.trz"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        self._remember_file(key, path)
+        tz = self.config_.timezone
+
+        def work() -> int:
+            data = self._api.export(station, "trz", tz)
+            # Binary: the trz format uses CRLF line endings, keep them as sent.
+            Path(path).write_bytes(data)
+            return sum(1 for line in data.splitlines() if line.strip())
+
+        self._status.set(f"Downloading {station} ...")
+        self._run_async(
+            work,
+            lambda n: self._status.set(f"{station}: {n} boats saved to {path}."),
+            lambda e: self._file_action_failed(f"Download {station}", e),
+        )
+
+    def _file_action_failed(self, title: str, exc: Exception) -> None:
+        self._status.set(f"{title} failed: {exc}")
+        messagebox.showerror(title, str(exc), parent=self)
 
     def _overview_failed(self, exc: Exception) -> None:
         self._status.set(f"Overview failed: {exc}")

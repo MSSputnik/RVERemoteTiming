@@ -135,12 +135,12 @@ class App(tk.Tk):
         self.title(f"{APP_NAME} {APP_VERSION} - {config.station}")
         self._setup_platform_style()
         self._setup_list_style()
-        self.minsize(int(760 * self._font_scale), 420)
+        self.minsize(int(600 * self._font_scale), 420)
         if self._overview:
             # A large window: 90 % of the screen height, centered. The width
             # is capped, wider only adds empty space (e.g. ultrawide screens).
             sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-            w = min(int(sw * 0.9), int(1400 * self._font_scale))
+            w = min(int(sw * 0.9), int(900 * self._font_scale))
             h = int(sh * 0.9)
             self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 3}")
 
@@ -482,27 +482,37 @@ class App(tk.Tk):
         self._tree = ttk.Treeview(
             self._container, columns=cols, show="headings", height=16
         )
-        for col, title, width in (
-            ("boat", "Boat", 70),
-            ("planned", "Planned start", 100),
-            ("club", "Club", 180),
-            ("distance", "Distance", 80),
-            ("passed", "Passed at", 110),
-            ("recorded", "Recorded at", 110),
-            ("current", "Current", 70),
-            ("deleted", "Deleted", 70),
-            ("upstream", f"{self._upstream_label} passed", 120),
-            ("race", "Race", 220),
-            ("st_start", "Start", 100),
-            ("st_3000m", "3000m", 100),
-            ("st_6000m", "6000m", 100),
+        self._column_widths: dict[str, int] = {}  # base width per column
+        for col, title, width, anchor in (
+            ("boat", "Boat", 70, "center"),
+            ("planned", "Planned start", 100, "center"),
+            ("club", "Club", 80, "w"),
+            ("distance", "Distance", 80, "center"),
+            ("passed", "Passed at", 110, "center"),
+            ("recorded", "Recorded at", 110, "center"),
+            ("current", "Current", 70, "center"),
+            ("deleted", "Deleted", 70, "center"),
+            ("upstream", f"{self._upstream_label} passed", 120, "center"),
+            ("race", "Race", 220, "w"),
+            ("st_start", "Start", 100, "center"),
+            ("st_3000m", "3000m", 100, "center"),
+            ("st_6000m", "6000m", 100, "center"),
         ):
             self._tree.heading(col, text=title)
-            self._tree.column(col, width=int(width * self._font_scale), anchor="center")
+            self._column_widths[col] = int(width * self._font_scale)
+            # stretch=False: _fit_columns sizes the columns, Tk must not.
+            self._tree.column(
+                col,
+                width=self._column_widths[col],
+                minwidth=20,
+                anchor=anchor,
+                stretch=False,
+            )
         scroll = ttk.Scrollbar(self._container, command=self._tree.yview)
         self._tree.configure(yscrollcommand=scroll.set)
         scroll.pack(side="right", fill="y")
         self._tree.pack(fill="both", expand=True, pady=(4, 0))
+        self._tree.bind("<Configure>", lambda _e: self._fit_columns())
         self._tree.tag_configure("deleted", foreground="#888")
         self._tree.tag_configure("finished", foreground="#777")
         # Alternating row colors; boats missing in the race info are highlighted.
@@ -1347,7 +1357,9 @@ class App(tk.Tk):
             columns = DOWNSTREAM_COLUMNS
         else:
             columns = NORMAL_COLUMNS
-        self._tree.configure(displaycolumns=columns)
+        if tuple(self._tree.cget("displaycolumns")) != columns:
+            self._tree.configure(displaycolumns=columns)
+            self._fit_columns()
         if self._overview:
             rows = self._rows_overview()
         else:
@@ -1371,6 +1383,27 @@ class App(tk.Tk):
             self._focus_boat = None
         else:
             self._tree.yview_moveto(top)
+
+    def _fit_columns(self) -> None:
+        """Spread the visible columns over the full width of the list.
+
+        Tk only does this on a resize, so the list would start with a gap on
+        the right and keep it after the view switches its columns.
+        """
+        available = self._tree.winfo_width() - 4  # minus the border
+        shown = [c for c in self._tree.cget("displaycolumns") if c != "#all"]
+        if available <= 1 or not shown:
+            return  # not mapped yet: the first <Configure> calls again
+        total = sum(self._column_widths[c] for c in shown)
+        used = 0
+        for n, col in enumerate(shown):
+            if n == len(shown) - 1:
+                width = available - used  # the last column takes the rest
+            else:
+                width = self._column_widths[col] * available // total
+            width = max(20, width)
+            used += width
+            self._tree.column(col, width=width)
 
     def _scroll_to_focus(self, rows: list[Row], show_all: bool) -> None:
         """Scroll so that the focus row has a few rows above it."""

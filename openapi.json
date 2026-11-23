@@ -296,6 +296,19 @@
             "title": "Entry Id",
             "type": "string"
           },
+          "invalidates": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Makes this entry an invalidation marker: it cancels the entry of the same boat with this entry_id. Cancelled entries and the marker itself are ignored when selecting the current value. The history is kept. Cannot be combined with deleted, and a marker cannot be cancelled. passed_at is optional and ignored.",
+            "title": "Invalidates"
+          },
           "passed_at": {
             "anyOf": [
               {
@@ -331,7 +344,7 @@
             "type": "integer"
           },
           "current": {
-            "description": "True for the latest entry (by recorded_at) of the boat.",
+            "description": "True for the latest valid entry (by recorded_at) of the boat. Never true for an invalidation marker or an invalid entry.",
             "title": "Current",
             "type": "boolean"
           },
@@ -345,6 +358,24 @@
             "format": "uuid",
             "title": "Entry Id",
             "type": "string"
+          },
+          "invalid": {
+            "description": "True when an invalidation marker of the same boat cancels this entry. Computed when reading, not stored.",
+            "title": "Invalid",
+            "type": "boolean"
+          },
+          "invalidates": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Set on an invalidation marker: the entry_id of the cancelled entry.",
+            "title": "Invalidates"
           },
           "passed_at": {
             "anyOf": [
@@ -375,6 +406,7 @@
           "entry_id",
           "recorded_at",
           "received_at",
+          "invalid",
           "current"
         ],
         "title": "TimingItem",
@@ -996,7 +1028,7 @@
     },
     "/timings/{station}": {
       "get": {
-        "description": "Returns the whole partition of a station, all entries (delete markers included) with the current one marked. Roles: Admin, Zeitnahme_Start, Zeitnahme_3000m, Zeitnahme_6000m, Regattaleitung (all stations).",
+        "description": "Returns the whole partition of a station, all entries (delete and invalidation markers included) with the current one marked. Cancelled entries have invalid=true. Roles: Admin, Zeitnahme_Start, Zeitnahme_3000m, Zeitnahme_6000m, Regattaleitung (all stations).",
         "operationId": "getTimings",
         "parameters": [
           {
@@ -1076,7 +1108,7 @@
         ]
       },
       "post": {
-        "description": "Records a passing time at a station. Roles: Admin, or the station's own group (Zeitnahme_Start for start, Zeitnahme_3000m for 3000m, Zeitnahme_6000m for 6000m). Idempotent per entry_id: a repeat returns 200 with status duplicate. Corrections are new entries, the latest recorded_at wins. With deleted=true the entry is a delete marker (soft delete): the boat is left out of the exports while the marker is its latest entry, the history is kept, and passed_at is optional.",
+        "description": "Records a passing time at a station. Roles: Admin, or the station's own group (Zeitnahme_Start for start, Zeitnahme_3000m for 3000m, Zeitnahme_6000m for 6000m). Idempotent per entry_id: a repeat returns 200 with status duplicate. Corrections are new entries, the latest recorded_at wins. With deleted=true the entry is a delete marker (soft delete): the boat is left out of the exports while the marker is its latest entry, the history is kept, and passed_at is optional. With invalidates set to an entry_id the entry is an invalidation marker: it cancels the entry of the same boat with that entry_id, so a wrong entry (for example a mistyped boat number) no longer counts. The marker itself and the cancelled entry are ignored when selecting the current value, the history is kept, and passed_at is optional and ignored. It cannot be combined with deleted, and a marker cannot be cancelled.",
         "operationId": "postTiming",
         "parameters": [
           {

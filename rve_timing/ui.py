@@ -49,9 +49,10 @@ class PendingEntry:
     passed_at: datetime | None
     recorded_at: datetime
     deleted: bool = False
+    invalidates: uuid.UUID | None = None  # entry_id of the entry to cancel
 
 
-ALL_COLUMNS = ("boat", "passed", "recorded", "current", "deleted")
+ALL_COLUMNS = ("boat", "passed", "recorded", "current", "deleted", "invalid")
 NORMAL_COLUMNS = ("boat", "club", "distance", "planned", "passed", "recorded")
 # 3000m / 6000m: race info, the station before, then this station.
 DOWNSTREAM_COLUMNS = ("boat", "club", "distance", "upstream", "passed", "recorded")
@@ -81,6 +82,7 @@ TREE_COLUMNS = (
     "st_start",
     "st_3000m",
     "st_6000m",
+    "invalid",
 )
 IS_LINUX = sys.platform.startswith("linux")
 ROWS_BEFORE_FOCUS = 5  # rows shown above the boat in focus
@@ -536,6 +538,7 @@ class App(tk.Tk):
             ("recorded", "Recorded at", 110, "center"),
             ("current", "Current", 70, "center"),
             ("deleted", "Deleted", 70, "center"),
+            ("invalid", "Invalid", 70, "center"),
             ("upstream", f"{self._upstream_label} passed", 120, "center"),
             ("race", "Race", 220, "w"),
             ("st_start", "Start", 100, "center"),
@@ -663,12 +666,27 @@ class App(tk.Tk):
             bar, text="Edit time ...", underline=0, command=self._edit_selected
         )
         edit.pack(side="right")
+        change = ttk.Button(
+            bar, text="Change boat ...", command=self._change_boat_selected
+        )
+        change.pack(side="right", padx=(0, 4))
         # Only shown in the "Show all records" view, see _update_restore_button.
-        # While hidden, _tab_move skips it.
+        # While hidden, _tab_move skips them.
         self._restore_btn = ttk.Button(
             bar, text="Restore", command=self._restore_selected
         )
-        return [show_all, self._restore_btn, edit, delete, refresh]
+        self._invalidate_btn = ttk.Button(
+            bar, text="Invalidate", command=self._invalidate_selected
+        )
+        return [
+            show_all,
+            self._invalidate_btn,
+            self._restore_btn,
+            change,
+            edit,
+            delete,
+            refresh,
+        ]
 
     def _build_overview_bar(self) -> list[tk.Widget]:
         """The bar above the overview list. Returns its widgets in Tab order."""
@@ -801,6 +819,7 @@ class App(tk.Tk):
                 entry.entry_id,
                 entry.recorded_at,
                 entry.deleted,
+                entry.invalidates,
             )
 
         self._run_async(
@@ -816,6 +835,8 @@ class App(tk.Tk):
         self._update_pending_label()
         if result.get("status") == "duplicate":
             state = "already existed"
+        elif entry.invalidates:
+            state = "entry invalidated"
         else:
             state = "deleted" if entry.deleted else "saved"
         self._status.set(f"Boat {entry.boat_number}: {state}.")
@@ -956,8 +977,10 @@ class App(tk.Tk):
         shown = bool(self._restore_btn.winfo_manager())
         if show_all and not shown:
             self._restore_btn.pack(side="right", padx=4)
+            self._invalidate_btn.pack(side="right")
         elif not show_all and shown:
             self._restore_btn.pack_forget()
+            self._invalidate_btn.pack_forget()
 
     def _show_timings(self, items: list[dict[str, Any]]) -> None:
         self._all_items = items
@@ -1286,15 +1309,24 @@ class App(tk.Tk):
                 self._fmt(passed) if passed else "-",
                 self._fmt(item["recorded_at"]),
                 "yes" if item["current"] else "",
-                "yes" if deleted else "",
+                "marker" if deleted else "",
+                "",  # upstream, race, st_start, st_3000m, st_6000m
+                "",
+                "",
+                "",
+                "",
+                "marker"
+                if item.get("invalidates")
+                else ("yes" if item.get("invalid") else ""),
             )
+            faded = deleted or bool(item.get("invalid") or item.get("invalidates"))
             rows.append(
                 Row(
                     iid,
                     item["boat_number"],
                     values,
                     None,
-                    ("deleted",) if deleted else (),
+                    ("deleted",) if faded else (),
                 )
             )
         return rows
@@ -1697,6 +1729,14 @@ class App(tk.Tk):
                 parent=self,
             )
             return
+        if item.get("invalidates"):
+            messagebox.showinfo(
+                "Restore",
+                "An invalidation marker cannot be restored.\n"
+                "Select a timing entry to restore it.",
+                parent=self,
+            )
+            return
         try:
             passed_at = datetime.fromisoformat(item["passed_at"])
         except (KeyError, TypeError, ValueError):
@@ -1716,6 +1756,97 @@ class App(tk.Tk):
         self._status.set(
             f"Boat {boat}: restoring {passed_at.astimezone(self._tz).strftime('%H:%M:%S')} ..."
         )
+        self._update_pending_label()
+        self._send_pending()
+
+    def _invalidate_selected(self) -> None:
+        """Cancel the selected entry (a timing or a delete marker) of its boat."""
+        item = self._selected_item()
+        if item is None:
+            return
+        boat = item["boat_number"]
+        if item.get("invalidates"):
+            messagebox.showerror(
+                "Invalidate",
+                "An invalidation marker cannot be invalidated.",
+                parent=self,
+            )
+            return
+        if item.get("invalid"):
+            messagebox.showerror(
+                "Invalidate", "This entry is already invalid.", parent=self
+            )
+            return
+        what = "delete marker" if item.get("deleted") else "timing"
+        if not messagebox.askokcancel(
+            "Invalidate", f"Invalidate this {what} of boat {boat}?", parent=self
+        ):
+            return
+        self._queue_invalidation(boat, item)
+        self._update_pending_label()
+        self._send_pending()
+
+    def _queue_invalidation(self, boat: int, item: dict[str, Any]) -> None:
+        self._pending.append(
+            PendingEntry(
+                uuid.uuid4(),
+                boat,
+                passed_at=None,
+                recorded_at=self._now(),
+                invalidates=uuid.UUID(str(item["entry_id"])),
+            )
+        )
+
+    def _change_boat_selected(self) -> None:
+        """Wrong boat number recorded: record the time for the right boat and
+        invalidate the entry of the wrong one."""
+        item = self._selected_item()
+        if item is None:
+            return
+        old_boat = item["boat_number"]
+        if item.get("deleted") or item.get("invalidates") or item.get("invalid"):
+            messagebox.showinfo(
+                "Change boat",
+                "Select a valid timing entry to change its boat number.",
+                parent=self,
+            )
+            return
+        try:
+            passed_at = datetime.fromisoformat(item["passed_at"])
+        except (KeyError, TypeError, ValueError):
+            messagebox.showinfo(
+                "Change boat", "This entry has no valid passing time.", parent=self
+            )
+            return
+        if passed_at.tzinfo is None:
+            passed_at = passed_at.replace(tzinfo=self._tz)
+
+        def check(values: dict[str, str]) -> str:
+            text = values["boat"]
+            if not text.isdigit():
+                return "The boat number is an integer >= 0."
+            if int(text) == old_boat:
+                return "This is the same boat number."
+            return ""
+
+        values = _ask_fields(
+            self,
+            f"Change boat {old_boat}",
+            (("boat", "Correct boat number", ""),),
+            check,
+        )
+        if values is None:
+            return
+        new_boat = int(values["boat"])
+        now = self._now()
+        self._focus_boat = new_boat
+        # The new entry first: if it is rejected, nothing is lost for the user
+        # to see; then the wrong entry is cancelled.
+        self._pending.append(
+            PendingEntry(uuid.uuid4(), new_boat, passed_at=passed_at, recorded_at=now)
+        )
+        self._queue_invalidation(old_boat, item)
+        self._status.set(f"Changing boat {old_boat} to {new_boat} ...")
         self._update_pending_label()
         self._send_pending()
 

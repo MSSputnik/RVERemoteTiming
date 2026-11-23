@@ -128,6 +128,18 @@ and the username cleared, then you fill in the rest.
    again. Select it and click "Restore": a new entry with the same boat and
    passing time is sent and becomes the current one. The current entry and
    delete markers cannot be restored, the app shows a message instead.
+   "Restore" also brings back a deleted boat, without searching the list.
+   The "Deleted" column shows "marker" for delete markers. The "Invalid"
+   column shows "yes" for cancelled entries and "marker" for invalidation
+   markers (all greyed out).
+   - In the same view the "Invalidate" button cancels the selected entry,
+     a timing or a delete marker. Invalidating a delete marker undeletes the
+     boat. An invalidation marker, or an entry that is already invalid,
+     cannot be invalidated: the app shows an error.
+   - "Change boat ..." (also in the normal view) corrects a time recorded
+     for the wrong boat. Select the entry and enter the correct boat number:
+     the app sends a new entry for that boat with the same passing time and
+     an invalidation marker for the selected entry.
 5. To correct a time, select an entry and click "Edit time ..." (or double
    click it). Enter the new time as HH:MM:SS. The date stays the same. This
    sends a new entry, the latest one wins.

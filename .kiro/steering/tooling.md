@@ -56,6 +56,32 @@ dependencies are used.
 - Suppress accepted findings inline in the resource block, with a reason:
   `#checkov:skip=<CHECK_ID>:<reason>`.
 
+## Versioning
+
+The app version lives in two files that must always match:
+`APP_VERSION` in `rve_timing/version.py` and `version` in `pyproject.toml`.
+After changing `pyproject.toml`, run `uv lock` so `uv.lock` follows.
+
+- Whenever the application changes (code or behavior), check first whether the
+  version still has to be raised. Do this before the first edit of a task, and
+  again before reporting the task as done:
+  - `git log --oneline -3` and `git status --short` show what is committed and
+    what is not.
+  - `git show HEAD:rve_timing/version.py` shows the committed version.
+  - Compare it with `APP_VERSION` in the working tree:
+    - Same as the committed version: the current version is already released.
+      Raise it.
+    - Higher than the committed version: it was already raised for the changes
+      that are not committed yet. Keep it and do not raise it again.
+- Use semantic versioning: major for breaking changes, minor for new features,
+  patch for fixes and small adjustments (layout, key bindings, wording).
+- If the user says not to change the version, do not change it. An explicit
+  instruction always wins over the rules above.
+- Changes that touch no application code (steering files, run scripts, only the
+  README) need no new version.
+- Say in the final answer which version the change is part of, and whether it
+  was raised or kept.
+
 ## Slow commands and missing output
 
 - `tofu` and `uv run checkov` can take a minute or more before any output

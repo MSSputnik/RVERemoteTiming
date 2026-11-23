@@ -77,14 +77,18 @@ class ApiClient:
         entry_id: uuid.UUID | None = None,
         recorded_at: datetime | None = None,
         deleted: bool = False,
+        invalidates: uuid.UUID | None = None,
     ) -> dict[str, Any]:
-        """Record a passing time, or a delete marker with deleted=True.
+        """Record a passing time, a delete marker (deleted=True) or an
+        invalidation marker (invalidates=entry_id of an entry of the same boat).
 
         Reuse entry_id when retrying (idempotent). A correction is a new
         entry: the latest recorded_at wins.
         """
-        if passed_at is None and not deleted:
-            raise ValueError("passed_at is required unless deleted is true")
+        if invalidates is not None and deleted:
+            raise ValueError("invalidates cannot be combined with deleted")
+        if passed_at is None and not deleted and invalidates is None:
+            raise ValueError("passed_at is required unless deleted or invalidates")
         if passed_at is not None and passed_at.tzinfo is None:
             raise ValueError("passed_at needs a timezone")
         recorded_at = recorded_at or datetime.now().astimezone()
@@ -97,6 +101,8 @@ class ApiClient:
             body["passed_at"] = passed_at.isoformat()
         if deleted:
             body["deleted"] = True
+        if invalidates is not None:
+            body["invalidates"] = str(invalidates)
         return self._request("POST", f"/timings/{station}", json=body).json()
 
     def put_race_info(self, csv_data: bytes) -> dict[str, Any]:

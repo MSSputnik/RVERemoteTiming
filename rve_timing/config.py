@@ -41,6 +41,7 @@ DEFAULT_CONFIG: dict[str, object] = {
     "show_all_records": False,
     "race_info_interval_minutes": 5,
     "rows_before_focus": 5,
+    "show_exit_button": False,
 }
 
 
@@ -87,6 +88,7 @@ class Config:
     show_all_records: bool = False
     race_info_interval_minutes: int = 5  # 0 disables the automatic pull
     rows_before_focus: int = 5  # rows shown above the boat just recorded
+    show_exit_button: bool = False  # "Exit" button right of "Sign out"
     refresh_token: str = ""  # decoded; empty when login is not remembered
     # Last file used per upload/download button, e.g. {"download_start": "..."}.
     last_files: dict[str, str] = field(default_factory=dict)
@@ -149,6 +151,10 @@ def load_config(path: Path | None = None) -> Config:
     ):
         raise ConfigError("rows_before_focus must be an integer >= 0.")
 
+    show_exit_button = raw.get("show_exit_button", False)
+    if not isinstance(show_exit_button, bool):
+        raise ConfigError("show_exit_button must be true or false.")
+
     last_files = raw.get("last_files", {})
     if not isinstance(last_files, dict):
         last_files = {}
@@ -172,6 +178,7 @@ def load_config(path: Path | None = None) -> Config:
         show_all_records=show_all_records,
         race_info_interval_minutes=race_info_interval_minutes,
         rows_before_focus=rows_before_focus,
+        show_exit_button=show_exit_button,
         refresh_token=refresh_token,
         last_files=last_files,
     )
@@ -194,6 +201,7 @@ def save_display_settings(
     timezone: str,
     race_info_interval_minutes: int,
     rows_before_focus: int,
+    show_exit_button: bool,
     path: Path | None = None,
 ) -> None:
     """Store the values of the "Settings" dialog of the main window."""
@@ -202,6 +210,7 @@ def save_display_settings(
             "timezone": timezone,
             "race_info_interval_minutes": race_info_interval_minutes,
             "rows_before_focus": rows_before_focus,
+            "show_exit_button": show_exit_button,
         },
         path,
     )

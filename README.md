@@ -70,6 +70,12 @@ Optional:
   start or "Refresh"). Default `5`. Use a smaller number on a small screen,
   `0` puts the boat in the first line. The "Settings ..." button of the main
   window changes it too.
+- `show_exit_button`: `true` or `false` (default). Shows an "Exit" button at
+  the right of "Sign out" in the main window. Useful where the window has no
+  close button, for example on a tablet. It closes the app and keeps the
+  stored login. If entries are not sent yet, it asks first. The "Settings ..."
+  button of the main window has a checkbox for it, and the button appears or
+  disappears at once.
 - `show_all_records`: `true` or `false` (default). State of the "Show all
   records" checkbox. The app writes it back when you toggle the checkbox.
 

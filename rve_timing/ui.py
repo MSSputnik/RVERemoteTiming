@@ -469,6 +469,28 @@ class App(tk.Tk):
         self._auth.sign_out()
         self._status.set(f"Sign in failed: {exc}")
 
+    def _update_exit_button(self) -> None:
+        """Show or hide the Exit button as the configuration says."""
+        button = self._exit_btn
+        shown = bool(button.winfo_manager())
+        if self.config_.show_exit_button and not shown:
+            # Packed ahead of everything else, so it is the right-most one.
+            first = button.master.pack_slaves()[0]
+            button.pack(side="right", padx=(4, 0), before=first)
+        elif not self.config_.show_exit_button and shown:
+            button.pack_forget()
+
+    def _exit_app(self) -> None:
+        """Exit button: close the app. The stored login stays as it is."""
+        if self._pending and not messagebox.askokcancel(
+            "Exit",
+            f"{len(self._pending)} timing(s) are not sent yet and will be lost "
+            "when the app closes.\n\nExit anyway?",
+            parent=self,
+        ):
+            return
+        self.destroy()
+
     def _sign_out(self) -> None:
         self._forget_refresh_token()
         self._auth.sign_out()
@@ -488,6 +510,11 @@ class App(tk.Tk):
         ).pack(side="left")
         sign_out = ttk.Button(header, text="Sign out", command=self._sign_out)
         sign_out.pack(side="right")
+        # Optional (config show_exit_button, "Settings ..."): always created,
+        # shown to the right of "Sign out" while enabled. While hidden,
+        # _tab_move skips it.
+        self._exit_btn = ttk.Button(header, text="Exit", command=self._exit_app)
+        self._update_exit_button()
         settings = ttk.Button(header, text="Settings ...", command=self._edit_settings)
         settings.pack(side="right", padx=4)
         header_tabs: list[tk.Widget] = []
@@ -512,7 +539,7 @@ class App(tk.Tk):
             )
             upload.pack(side="right", padx=(4, 0))
             header_tabs = [upload, *downloads, edit_info]
-        header_tabs += [settings, sign_out]
+        header_tabs += [settings, sign_out, self._exit_btn]
 
         self._main_active = True
         if self._overview:
@@ -725,13 +752,15 @@ class App(tk.Tk):
                 ),
             ),
             _check_settings,
+            flags=(("exit", "Show the Exit button", cfg.show_exit_button),),
         )
         if values is None:
             return
         interval = int(values["interval"])
         rows = int(values["rows"])
+        show_exit = values["exit"] == "1"
         try:
-            save_display_settings(values["timezone"], interval, rows)
+            save_display_settings(values["timezone"], interval, rows, show_exit)
         except ConfigError as exc:
             self._status.set(str(exc))
             return
@@ -740,7 +769,9 @@ class App(tk.Tk):
             timezone=values["timezone"],
             race_info_interval_minutes=interval,
             rows_before_focus=rows,
+            show_exit_button=show_exit,
         )
+        self._update_exit_button()
         self._tz = ZoneInfo(values["timezone"])
         self._schedule_race_timer()
         self._render_timings()  # times are shown in the new timezone
@@ -1914,9 +1945,12 @@ def _ask_fields(
     title: str,
     fields: tuple[tuple[str, str, str], ...],
     check: Callable[[dict[str, str]], str],
+    flags: tuple[tuple[str, str, bool], ...] = (),
 ) -> dict[str, str] | None:
     """Modal dialog with one text field per (key, label, value).
 
+    flags are checkboxes (key, label, state) below the fields; their value in
+    the result is "1" or "0".
     check returns a message for the first invalid value, or an empty string.
     Returns None when cancelled.
     """
@@ -1934,14 +1968,24 @@ def _ask_fields(
         entry = ttk.Entry(frame, textvariable=variables[key], width=48)
         entry.grid(row=row, column=1, pady=4)
         first = first or entry
+    flag_vars: dict[str, tk.BooleanVar] = {}
+    for n, (key, label, state) in enumerate(flags, start=len(fields)):
+        flag_vars[key] = tk.BooleanVar(value=state)
+        ttk.Checkbutton(frame, text=label, variable=flag_vars[key]).grid(
+            row=n, column=1, sticky="w", pady=4
+        )
+    rows = len(fields) + len(flags)
     error = tk.StringVar()
     ttk.Label(frame, textvariable=error, foreground="#b00").grid(
-        row=len(fields), column=0, columnspan=2
+        row=rows, column=0, columnspan=2
     )
     result: list[dict[str, str]] = []
 
     def ok() -> None:
         values = {key: var.get().strip() for key, var in variables.items()}
+        values.update(
+            {key: "1" if var.get() else "0" for key, var in flag_vars.items()}
+        )
         problem = check(values)
         if problem:
             error.set(problem)
@@ -1950,7 +1994,7 @@ def _ask_fields(
         dlg.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=len(fields) + 1, column=0, columnspan=2, pady=(8, 0))
+    buttons.grid(row=rows + 1, column=0, columnspan=2, pady=(8, 0))
     ttk.Button(buttons, text="Save", command=ok).pack(side="left", padx=4)
     ttk.Button(buttons, text="Cancel", command=dlg.destroy).pack(side="left", padx=4)
     dlg.bind("<Return>", lambda _e: ok())

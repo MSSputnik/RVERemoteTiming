@@ -174,6 +174,9 @@ class App(tk.Tk):
             "e": self._edit_selected,
             "d": self._delete_selected,
             "c": self._change_boat_selected,
+            # Same as the Up and Down keys, for keyboards without arrows.
+            "h": lambda: self._step_boat(1),
+            "r": lambda: self._step_boat(-1),
         }
         for letter, action in self._shortcuts.items():
             for key in (f"<{letter}>", f"<{letter.upper()}>"):
@@ -2065,6 +2068,10 @@ def _ask_boat(parent: "App", old_boat: int) -> int | None:
     dlg.bind("<Escape>", lambda _e: dlg.destroy())
     dlg.bind("<Up>", lambda _e: step(1))
     dlg.bind("<Down>", lambda _e: step(-1))
+    # h and r like in the main window; "break" keeps the letter out of the field.
+    for letter, delta in (("h", 1), ("r", -1)):
+        for key in (f"<{letter}>", f"<{letter.upper()}>"):
+            entry.bind(key, lambda _e, d=delta: step(d) or "break")
     entry.focus_set()
     entry.select_range(0, "end")
     _center_on(dlg, parent)

@@ -107,7 +107,9 @@ and the username cleared, then you fill in the rest.
 2. Type a boat number and press Enter, the `s` key or click "Record now (s)".
    The current time is sent as the passing time to the configured station.
    The arrow buttons next to the field, or the Up and Down keys, change the
-   boat number by one without recording it. The Tab key moves from the boat
+   boat number by one without recording it. The keys `h` (up) and `r` (down)
+   do the same, for keyboards without arrow keys. They work in the "Change
+   boat" dialog as well. The Tab key moves from the boat
    number to "Record now", "Auto increment", "Show all records", "Restore"
    (when shown), "Edit time", "Delete" and "Refresh", then to the buttons at
    the top ("Settings", "Sign out") and back to the boat number. Shift+Tab

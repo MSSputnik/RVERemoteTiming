@@ -24,6 +24,13 @@ Create the local configuration from the example:
 Copy-Item config.example.json config.json
 ```
 
+You can also skip this step: when the configuration file does not exist, the
+app asks whether to create it with the default values (station `start`, the
+default region and base URL, the other options at their defaults). Enter
+answers "Yes", ESC answers "No" and the app ends. Set the station in the file
+afterwards if the device is not the start, and the client ID in the app with
+"Set Login Parameters ...".
+
 `config.json` is git-ignored. Set the path in the `RVE_TIMING_CONFIG`
 environment variable to use another file.
 
@@ -58,6 +65,11 @@ Optional:
   `6000m` also the timings of the station before) is pulled automatically.
   Default `5`, `0` turns the automatic pull off. The "Settings ..." button of
   the main window changes it, and the new interval applies at once.
+- `rows_before_focus`: how many rows of the list are shown above the boat you
+  just recorded, edited or deleted (and above the first boat due after a
+  start or "Refresh"). Default `5`. Use a smaller number on a small screen,
+  `0` puts the boat in the first line. The "Settings ..." button of the main
+  window changes it too.
 - `show_all_records`: `true` or `false` (default). State of the "Show all
   records" checkbox. The app writes it back when you toggle the checkbox.
 
@@ -66,6 +78,11 @@ Optional:
 ```powershell
 uv run python -m rve_timing
 ```
+
+Where a module cannot be run, for example in Pydroid 3 on Android, open
+`main.py` in the editor and run it. It only calls the same `main()` as the
+module. It changes to its own folder first, so `config.json` is found there
+(unless `RVE_TIMING_CONFIG` is set to another file).
 
 For one config file per station, use `run_start.ps1`, `run_3000m.ps1`,
 `run_6000m.ps1` or `run_regattaleitung.ps1`. They start the app with
@@ -91,8 +108,9 @@ and the username cleared, then you fill in the rest.
    goes the other way.
    One-letter shortcuts work anywhere in the station view, also in the boat
    number field (the letter is not typed there): `s` records, `i` switches
-   "Auto increment", `e` edits the time of the selected entry and `d`
-   deletes it (after a confirmation: Enter confirms, ESC cancels). The
+   "Auto increment", `e` edits the time of the selected entry, `c` changes
+   its boat number and `d` deletes it (after a confirmation: Enter
+   confirms, ESC cancels). The
    letter is underlined on the button. Upper case works too.
 3. The table lists every boat of the race info, ordered by planned start, with
    the club, the distance and the current passing and recording time. Boats
@@ -103,8 +121,9 @@ and the username cleared, then you fill in the rest.
    as if it were the planned start (shown as `~HH:MM:SS`). Without any race
    info the list is a plain list of timings, newest first.
    - The list scrolls so that the boat you just recorded, edited or deleted
-     is visible with the 5 boats before it. After a start or "Refresh" it
-     scrolls to the first boat whose planned start is not yet over.
+     is visible with the `rows_before_focus` rows (default 5) before it.
+     After a start or "Refresh" it scrolls to the first boat whose planned
+     start is not yet over.
    - The race info (and the timings of the station before) is pulled at
      start, on "Refresh" and every
      `race_info_interval_minutes` minutes. The scroll position stays as it is
@@ -137,7 +156,9 @@ and the username cleared, then you fill in the rest.
      boat. An invalidation marker, or an entry that is already invalid,
      cannot be invalidated: the app shows an error.
    - "Change boat ..." (also in the normal view) corrects a time recorded
-     for the wrong boat. Select the entry and enter the correct boat number:
+     for the wrong boat (shortcut `c`). Select the entry and enter the
+     correct boat number. The dialog shows it large, prefilled with the old
+     number, with arrow buttons (or the Up and Down keys) to step it:
      the app sends a new entry for that boat with the same passing time and
      an invalidation marker for the selected entry.
 5. To correct a time, select an entry and click "Edit time ..." (or double
@@ -233,7 +254,8 @@ needed. Users who must set a new password have to do that outside the app.
 | `rve_timing/api.py` | API client. |
 | `rve_timing/ui.py` | Tkinter user interface. |
 | `rve_timing/version.py` | Application name and version. |
-| `rve_timing/__main__.py` | Entry point. |
+| `rve_timing/__main__.py` | Entry point of `python -m rve_timing`. |
+| `main.py` | Launcher script for environments that cannot run a module. |
 
 ## Linux
 

@@ -85,7 +85,6 @@ TREE_COLUMNS = (
     "invalid",
 )
 IS_LINUX = sys.platform.startswith("linux")
-ROWS_BEFORE_FOCUS = 5  # rows shown above the boat in focus
 
 # Activity indicator (lightning bolt in the bottom right corner).
 BOLT_POINTS = (13, 1, 4, 13, 10, 13, 8, 21, 18, 8, 12, 8)
@@ -174,6 +173,7 @@ class App(tk.Tk):
             "i": self._flip_auto_increment,
             "e": self._edit_selected,
             "d": self._delete_selected,
+            "c": self._change_boat_selected,
         }
         for letter, action in self._shortcuts.items():
             for key in (f"<{letter}>", f"<{letter.upper()}>"):
@@ -590,13 +590,13 @@ class App(tk.Tk):
     def _build_record_box(self) -> list[tk.Widget]:
         """The box to record a time. Returns its widgets in Tab order.
 
-        It shares one row with the information box, split 60 : 40.
+        It shares one row with the information box, split 56 : 44.
         """
         row = ttk.Frame(self._container)
         row.pack(fill="x", pady=8)
-        # uniform: the widths stay strictly 3 : 2, whatever the content needs.
-        row.columnconfigure(0, weight=3, uniform="record_row")
-        row.columnconfigure(1, weight=2, uniform="record_row")
+        # uniform: the widths stay strictly 28 : 22, whatever the content needs.
+        row.columnconfigure(0, weight=28, uniform="record_row")
+        row.columnconfigure(1, weight=22, uniform="record_row")
         entry_frame = ttk.LabelFrame(row, text="Record passing time", padding=8)
         entry_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
         self._build_information_box(row)
@@ -667,7 +667,10 @@ class App(tk.Tk):
         )
         edit.pack(side="right")
         change = ttk.Button(
-            bar, text="Change boat ...", command=self._change_boat_selected
+            bar,
+            text="Change boat ...",
+            underline=0,
+            command=self._change_boat_selected,
         )
         change.pack(side="right", padx=(0, 4))
         # Only shown in the "Show all records" view, see _update_restore_button.
@@ -703,7 +706,7 @@ class App(tk.Tk):
         return [refresh]
 
     def _edit_settings(self) -> None:
-        """Dialog for the timezone and the race info interval."""
+        """Dialog for timezone, race info interval and rows above the focus."""
         cfg = self.config_
         values = _ask_fields(
             self,
@@ -715,19 +718,28 @@ class App(tk.Tk):
                     "Race info pull interval in minutes (0 = off)",
                     str(cfg.race_info_interval_minutes),
                 ),
+                (
+                    "rows",
+                    "Rows shown above the recorded boat",
+                    str(cfg.rows_before_focus),
+                ),
             ),
             _check_settings,
         )
         if values is None:
             return
         interval = int(values["interval"])
+        rows = int(values["rows"])
         try:
-            save_display_settings(values["timezone"], interval)
+            save_display_settings(values["timezone"], interval, rows)
         except ConfigError as exc:
             self._status.set(str(exc))
             return
         self.config_ = replace(
-            cfg, timezone=values["timezone"], race_info_interval_minutes=interval
+            cfg,
+            timezone=values["timezone"],
+            race_info_interval_minutes=interval,
+            rows_before_focus=rows,
         )
         self._tz = ZoneInfo(values["timezone"])
         self._schedule_race_timer()
@@ -855,7 +867,9 @@ class App(tk.Tk):
             if self._pending and self._pending[0] is entry:
                 self._pending.popleft()
             self._update_pending_label()
-            messagebox.showerror("Rejected", f"Boat {entry.boat_number}: {exc}")
+            messagebox.showerror(
+                "Rejected", f"Boat {entry.boat_number}: {exc}", parent=self
+            )
             self._send_pending()
             return
         self._status.set(f"Boat {entry.boat_number} not sent, will retry: {exc}")
@@ -886,9 +900,19 @@ class App(tk.Tk):
             return ttk.Button(
                 parent, text="\u25b2" if up else "\u25bc", width=3, command=command
             )
-        image = _arrow_image(up)
+        # The image is measured in pixels, but the fonts follow the screen
+        # DPI. On a high-DPI screen (e.g. Android) it would be tiny, so it
+        # grows with the Tk scaling, relative to 96 DPI (= 4/3 pixel per pt).
+        factor = max(1.0, float(self.tk.call("tk", "scaling")) / (96 / 72))
+        image = _arrow_image(up, round(15 * factor), round(9 * factor))
         self._arrow_images.append(image)  # Tk drops images without a reference
-        return ttk.Button(parent, image=image, command=command)
+        # More padding as well, the button is touched with a finger there.
+        pad = round(4 * (factor - 1))
+        if pad == 0:  # a normal screen: the button stays as it was
+            return ttk.Button(parent, image=image, command=command)
+        style = ttk.Style(self)
+        style.configure("Arrow.TButton", padding=(pad, pad))
+        return ttk.Button(parent, image=image, style="Arrow.TButton", command=command)
 
     def _setup_list_style(self) -> None:
         """Make the font of the timing list larger than the default.
@@ -1177,7 +1201,9 @@ class App(tk.Tk):
         try:
             data = Path(path).read_bytes()
         except OSError as exc:
-            messagebox.showerror("Upload race info", f"Cannot read the file:\n{exc}")
+            messagebox.showerror(
+                "Upload race info", f"Cannot read the file:\n{exc}", parent=self
+            )
             return
         # OK/Cancel instead of Yes/No: Windows only closes a box with a
         # Cancel button on ESC. Enter presses OK.
@@ -1649,7 +1675,8 @@ class App(tk.Tk):
         if not rows:
             return
         idx = 0 if show_all else self._focus_index(rows)
-        self._tree.yview_moveto(max(0, idx - ROWS_BEFORE_FOCUS) / len(rows))
+        above = self.config_.rows_before_focus
+        self._tree.yview_moveto(max(0, idx - above) / len(rows))
 
     def _focus_index(self, rows: list[Row]) -> int:
         """Row of the boat just handled, else the first boat due from now on."""
@@ -1821,23 +1848,9 @@ class App(tk.Tk):
         if passed_at.tzinfo is None:
             passed_at = passed_at.replace(tzinfo=self._tz)
 
-        def check(values: dict[str, str]) -> str:
-            text = values["boat"]
-            if not text.isdigit():
-                return "The boat number is an integer >= 0."
-            if int(text) == old_boat:
-                return "This is the same boat number."
-            return ""
-
-        values = _ask_fields(
-            self,
-            f"Change boat {old_boat}",
-            (("boat", "Correct boat number", ""),),
-            check,
-        )
-        if values is None:
+        new_boat = _ask_boat(self, old_boat)
+        if new_boat is None:
             return
-        new_boat = int(values["boat"])
         now = self._now()
         self._focus_boat = new_boat
         # The new entry first: if it is rejected, nothing is lost for the user
@@ -1879,6 +1892,21 @@ class App(tk.Tk):
         )
         self._update_pending_label()
         self._send_pending()
+
+
+def _center_on(dlg: tk.Toplevel, parent: tk.Misc) -> None:
+    """Place a dialog over the middle of its parent window (a bit above the
+    center), kept inside the screen. Tk would leave the position to the
+    window manager, which often picks the top left corner."""
+    dlg.withdraw()  # no jump from the corner while it is moved
+    dlg.update_idletasks()  # the size is known after the layout
+    width, height = dlg.winfo_reqwidth(), dlg.winfo_reqheight()
+    x = parent.winfo_rootx() + (parent.winfo_width() - width) // 2
+    y = parent.winfo_rooty() + (parent.winfo_height() - height) // 3
+    x = max(0, min(x, dlg.winfo_screenwidth() - width))
+    y = max(0, min(y, dlg.winfo_screenheight() - height))
+    dlg.geometry(f"+{x}+{y}")
+    dlg.deiconify()
 
 
 def _ask_fields(
@@ -1929,6 +1957,73 @@ def _ask_fields(
     dlg.bind("<Escape>", lambda _e: dlg.destroy())
     if first is not None:
         first.focus_set()
+    _center_on(dlg, parent)
+    dlg.grab_set()
+    parent.wait_window(dlg)
+    return result[0] if result else None
+
+
+def _ask_boat(parent: "App", old_boat: int) -> int | None:
+    """Modal dialog for the correct boat number, prefilled with the old one.
+
+    Large number and arrow buttons like the record box. None when cancelled.
+    """
+    dlg = tk.Toplevel(parent)
+    dlg.title(f"Change boat {old_boat}")
+    dlg.transient(parent)
+    dlg.resizable(False, False)
+    frame = ttk.Frame(dlg, padding=12)
+    frame.pack()
+    ttk.Label(frame, text="Correct boat number").grid(
+        row=0, column=0, columnspan=2, pady=(0, 6)
+    )
+    var = tk.StringVar(value=str(old_boat))
+    entry = ttk.Entry(
+        frame,
+        textvariable=var,
+        width=6,
+        font=("TkDefaultFont", 22),
+        justify="center",
+    )
+    entry.grid(row=1, column=0, sticky="ns", padx=(0, 6))
+
+    def step(delta: int) -> None:
+        text = var.get().strip()
+        current = int(text) if text.isdigit() else old_boat
+        var.set(str(max(0, current + delta)))
+
+    arrows = ttk.Frame(frame)
+    arrows.grid(row=1, column=1)
+    parent._arrow_button(arrows, True, lambda: step(1)).pack()
+    parent._arrow_button(arrows, False, lambda: step(-1)).pack()
+    error = tk.StringVar()
+    ttk.Label(frame, textvariable=error, foreground="#b00").grid(
+        row=2, column=0, columnspan=2
+    )
+    result: list[int] = []
+
+    def ok() -> None:
+        text = var.get().strip()
+        if not text.isdigit():
+            error.set("The boat number is an integer >= 0.")
+            return
+        if int(text) == old_boat:
+            error.set("This is the same boat number.")
+            return
+        result.append(int(text))
+        dlg.destroy()
+
+    buttons = ttk.Frame(frame)
+    buttons.grid(row=3, column=0, columnspan=2, pady=(8, 0))
+    ttk.Button(buttons, text="Save", command=ok).pack(side="left", padx=4)
+    ttk.Button(buttons, text="Cancel", command=dlg.destroy).pack(side="left", padx=4)
+    dlg.bind("<Return>", lambda _e: ok())
+    dlg.bind("<Escape>", lambda _e: dlg.destroy())
+    dlg.bind("<Up>", lambda _e: step(1))
+    dlg.bind("<Down>", lambda _e: step(-1))
+    entry.focus_set()
+    entry.select_range(0, "end")
+    _center_on(dlg, parent)
     dlg.grab_set()
     parent.wait_window(dlg)
     return result[0] if result else None
@@ -1994,6 +2089,7 @@ def _ask_information(parent: tk.Tk, text: str) -> str | None:
     dlg.bind("<Escape>", lambda _e: dlg.destroy())
     editor.focus_set()
     editor.mark_set("insert", "end-1c")
+    _center_on(dlg, parent)
     dlg.grab_set()
     parent.wait_window(dlg)
     return result[0] if result else None
@@ -2022,6 +2118,8 @@ def _check_settings(values: dict[str, str]) -> str:
         return f"Unknown timezone {values['timezone']}."
     if not re.fullmatch(r"\d{1,4}", values["interval"]):
         return "The interval is a whole number of minutes, 0 to 9999."
+    if not re.fullmatch(r"\d{1,3}", values["rows"]):
+        return "The rows above the recorded boat are a whole number, 0 to 999."
     return ""
 
 
@@ -2083,9 +2181,57 @@ def _ask_time(parent: tk.Tk, boat: int, old: datetime) -> datetime | None:
     dlg.bind("<Escape>", lambda _e: dlg.destroy())
     entry.focus_set()
     entry.select_range(0, "end")
+    _center_on(dlg, parent)
     dlg.grab_set()
     parent.wait_window(dlg)
     return result[0] if result else None
+
+
+def ask_create_config(path: Path) -> bool:
+    """Ask before the app starts whether to create the missing config file.
+
+    Enter means yes, ESC (or closing the window) means no. A custom window,
+    because the native Yes/No box on Windows does not close on ESC.
+    """
+    root = tk.Tk()
+    root.title(APP_NAME)
+    root.resizable(False, False)
+    frame = ttk.Frame(root, padding=16)
+    frame.pack()
+    ttk.Label(
+        frame,
+        text=(
+            f"The configuration file was not found:\n{path.resolve()}\n\n"
+            "Create it with the default values?"
+        ),
+        justify="left",
+    ).pack(anchor="w")
+    answer: list[bool] = []
+
+    def choose(yes: bool) -> None:
+        answer.append(yes)
+        root.destroy()
+
+    buttons = ttk.Frame(frame)
+    buttons.pack(pady=(12, 0))
+    yes_button = ttk.Button(buttons, text="Yes", command=lambda: choose(True))
+    yes_button.pack(side="left", padx=4)
+    ttk.Button(buttons, text="No", command=lambda: choose(False)).pack(
+        side="left", padx=4
+    )
+    # Enter always answers yes, whichever button has the focus.
+    root.bind("<Return>", lambda _e: choose(True))
+    root.bind("<KP_Enter>", lambda _e: choose(True))
+    root.bind("<Escape>", lambda _e: choose(False))
+    root.protocol("WM_DELETE_WINDOW", lambda: choose(False))
+    # Centered on the screen, there is no main window yet.
+    root.update_idletasks()
+    x = (root.winfo_screenwidth() - root.winfo_reqwidth()) // 2
+    y = (root.winfo_screenheight() - root.winfo_reqheight()) // 3
+    root.geometry(f"+{max(0, x)}+{max(0, y)}")
+    yes_button.focus_set()
+    root.mainloop()
+    return bool(answer and answer[0])
 
 
 def run(config: Config) -> None:

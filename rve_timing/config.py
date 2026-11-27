@@ -20,6 +20,40 @@ class ConfigError(Exception):
     """Raised when the configuration file is missing or invalid."""
 
 
+class ConfigMissing(ConfigError):
+    """The configuration file does not exist (yet)."""
+
+    def __init__(self, path: Path) -> None:
+        super().__init__(f"Configuration file '{path.resolve()}' not found.")
+        self.path = path
+
+
+# Written when the user lets the app create the configuration file. The login
+# parameters are filled in later in the app ("Set Login Parameters ...").
+DEFAULT_CONFIG: dict[str, object] = {
+    "client_id": "",
+    "region": "eu-west-1",
+    "station": "start",
+    "base_url": "https://langstrecke-api.mssputnik.click",
+    "username": "",
+    "timezone": "Europe/Berlin",
+    "auto_increment": False,
+    "show_all_records": False,
+    "race_info_interval_minutes": 5,
+    "rows_before_focus": 5,
+}
+
+
+def create_default_config(path: Path | None = None) -> Path:
+    """Write the configuration file with the default values. Returns its path."""
+    path = path or config_path()
+    try:
+        path.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        raise ConfigError(f"Cannot create configuration '{path}': {exc}") from exc
+    return path
+
+
 XOR_PREFIX = "{xor}"
 XOR_KEY = 0x5F  # same key byte as the WebSphere {xor} encoding
 REFRESH_TOKEN_KEY = "refresh_token"
@@ -52,6 +86,7 @@ class Config:
     auto_increment: bool = False
     show_all_records: bool = False
     race_info_interval_minutes: int = 5  # 0 disables the automatic pull
+    rows_before_focus: int = 5  # rows shown above the boat just recorded
     refresh_token: str = ""  # decoded; empty when login is not remembered
     # Last file used per upload/download button, e.g. {"download_start": "..."}.
     last_files: dict[str, str] = field(default_factory=dict)
@@ -66,10 +101,7 @@ def load_config(path: Path | None = None) -> Config:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        raise ConfigError(
-            f"Configuration file '{path.resolve()}' not found. "
-            "Copy config.example.json to config.json and fill it in."
-        ) from None
+        raise ConfigMissing(path) from None
     except (OSError, json.JSONDecodeError) as exc:
         raise ConfigError(f"Cannot read configuration '{path}': {exc}") from exc
 
@@ -109,6 +141,14 @@ def load_config(path: Path | None = None) -> Config:
     ):
         raise ConfigError("race_info_interval_minutes must be an integer >= 0.")
 
+    rows_before_focus = raw.get("rows_before_focus", 5)
+    if (
+        isinstance(rows_before_focus, bool)
+        or not isinstance(rows_before_focus, int)
+        or rows_before_focus < 0
+    ):
+        raise ConfigError("rows_before_focus must be an integer >= 0.")
+
     last_files = raw.get("last_files", {})
     if not isinstance(last_files, dict):
         last_files = {}
@@ -131,6 +171,7 @@ def load_config(path: Path | None = None) -> Config:
         auto_increment=auto_increment,
         show_all_records=show_all_records,
         race_info_interval_minutes=race_info_interval_minutes,
+        rows_before_focus=rows_before_focus,
         refresh_token=refresh_token,
         last_files=last_files,
     )
@@ -150,13 +191,17 @@ def save_username(username: str, path: Path | None = None) -> None:
 
 
 def save_display_settings(
-    timezone: str, race_info_interval_minutes: int, path: Path | None = None
+    timezone: str,
+    race_info_interval_minutes: int,
+    rows_before_focus: int,
+    path: Path | None = None,
 ) -> None:
     """Store the values of the "Settings" dialog of the main window."""
     _update_config_many(
         {
             "timezone": timezone,
             "race_info_interval_minutes": race_info_interval_minutes,
+            "rows_before_focus": rows_before_focus,
         },
         path,
     )

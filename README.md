@@ -2,7 +2,7 @@
 
 A small Tkinter desktop app to record passing times at a rowing regatta
 station. It talks to the RVEBackend API (see `openapi.json`) and signs in
-through Amazon Cognito using boto3.
+through Amazon Cognito using its HTTP API (via requests).
 
 ## Requirements
 

@@ -1,4 +1,4 @@
-"""Cognito authentication and token refresh using boto3."""
+"""Cognito authentication and token refresh using the plain Cognito HTTP API."""
 
 import threading
 import time
@@ -6,13 +6,13 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
-import boto3
-from botocore import UNSIGNED
-from botocore.config import Config as BotoConfig
-from botocore.exceptions import BotoCoreError, ClientError
+import requests
 
 # Refresh this many seconds before the token really expires.
 EXPIRY_MARGIN = 60
+
+# Timeout in seconds for calls to Cognito.
+REQUEST_TIMEOUT = 15
 
 
 class AuthError(Exception):
@@ -52,21 +52,52 @@ class CognitoAuth:
         # Called with the refresh token after every sign in / refresh.
         self._on_refresh_token = on_refresh_token
         self._region = region
-        # Created on first use, so an empty or wrong region does not stop the
-        # app from starting. It is reported when signing in.
-        self._client: Any = None
         self._tokens: Tokens | None = None
         self._lock = threading.Lock()
 
-    def _cognito(self) -> Any:
-        if self._client is None:
-            # Public app client calls are unsigned, no AWS credentials are needed.
-            self._client = boto3.client(
-                "cognito-idp",
-                region_name=self._region,
-                config=BotoConfig(signature_version=UNSIGNED),
+    def _initiate_auth(
+        self, auth_flow: str, auth_parameters: dict[str, str]
+    ) -> dict[str, Any]:
+        """Call Cognito InitiateAuth. Public app client calls are unsigned.
+
+        Raises AuthError when Cognito rejects the request and AuthUnavailable
+        when it cannot be reached.
+        """
+        # Built per call, so an empty or wrong region does not stop the app
+        # from starting. It is reported when signing in.
+        url = f"https://cognito-idp.{self._region}.amazonaws.com/"
+        try:
+            resp = requests.post(
+                url,
+                headers={
+                    "Content-Type": "application/x-amz-json-1.1",
+                    "X-Amz-Target": "AWSCognitoIdentityProviderService.InitiateAuth",
+                },
+                json={
+                    "ClientId": self._client_id,
+                    "AuthFlow": auth_flow,
+                    "AuthParameters": auth_parameters,
+                },
+                timeout=REQUEST_TIMEOUT,
             )
-        return self._client
+        except requests.RequestException as exc:
+            raise AuthUnavailable(str(exc)) from exc
+
+        try:
+            body = resp.json()
+        except ValueError:
+            body = {}
+        if resp.status_code != 200:
+            message = (
+                body.get("message")
+                or body.get("Message")
+                or f"Cognito error (HTTP {resp.status_code})."
+            )
+            if resp.status_code >= 500:
+                # Server side problem: not a rejection, the session stays valid.
+                raise AuthUnavailable(message)
+            raise AuthError(message)
+        return body
 
     @property
     def signed_in(self) -> bool:
@@ -74,13 +105,12 @@ class CognitoAuth:
 
     def sign_in(self, username: str, password: str) -> None:
         try:
-            resp = self._cognito().initiate_auth(
-                ClientId=self._client_id,
-                AuthFlow="USER_PASSWORD_AUTH",
-                AuthParameters={"USERNAME": username, "PASSWORD": password},
+            resp = self._initiate_auth(
+                "USER_PASSWORD_AUTH", {"USERNAME": username, "PASSWORD": password}
             )
-        except (ClientError, BotoCoreError) as exc:
-            raise AuthError(_message(exc)) from exc
+        except AuthUnavailable as exc:
+            # Sign in has no session to keep, so report it as a plain error.
+            raise AuthError(str(exc)) from exc
 
         if "AuthenticationResult" not in resp:
             challenge = resp.get("ChallengeName", "unknown")
@@ -114,18 +144,16 @@ class CognitoAuth:
                 raise AuthError("Not signed in.")
             refresh_token = self._tokens.refresh_token
             try:
-                resp = self._cognito().initiate_auth(
-                    ClientId=self._client_id,
-                    AuthFlow="REFRESH_TOKEN_AUTH",
-                    AuthParameters={"REFRESH_TOKEN": refresh_token},
+                resp = self._initiate_auth(
+                    "REFRESH_TOKEN_AUTH", {"REFRESH_TOKEN": refresh_token}
                 )
-            except ClientError as exc:
+            except AuthUnavailable:
+                # Connection problem: keep the tokens and let the caller retry.
+                raise
+            except AuthError:
                 # Refresh token rejected (expired/revoked): session is over.
                 self._tokens = None
-                raise AuthError(_message(exc)) from exc
-            except BotoCoreError as exc:
-                # Connection problem: keep the tokens and let the caller retry.
-                raise AuthUnavailable(_message(exc)) from exc
+                raise
             result = resp["AuthenticationResult"]
             # A refresh does not return a new refresh token unless rotation is on.
             self._tokens = Tokens(
@@ -151,9 +179,3 @@ class CognitoAuth:
     def sign_out(self) -> None:
         with self._lock:
             self._tokens = None
-
-
-def _message(exc: Exception) -> str:
-    if isinstance(exc, ClientError):
-        return exc.response.get("Error", {}).get("Message") or str(exc)
-    return str(exc)

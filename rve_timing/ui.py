@@ -1,5 +1,6 @@
 """Tkinter user interface."""
 
+import os
 import queue
 import re
 import sys
@@ -25,6 +26,7 @@ from .config import (
     UPSTREAM_STATION,
     Config,
     ConfigError,
+    save_auto_download,
     save_auto_increment,
     save_display_settings,
     save_last_files,
@@ -222,7 +224,15 @@ class App(tk.Tk):
         self.after(BLINK_INTERVAL_MS, self._blink)
         self.after(RETRY_INTERVAL_MS, self._retry_timer)
         self._race_timer_id: str | None = None
+        # Automatic download of the exports (Regattaleitung).
+        self._auto_timer_id: str | None = None
+        self._auto_running = False
+        self._auto_checks: dict[str, ttk.Checkbutton] = {}
+        self._auto_vars: dict[str, tk.BooleanVar] = {}
+        self._auto_text = tk.StringVar()
+        self._auto_label: ttk.Label | None = None
         self._schedule_race_timer()
+        self._schedule_auto_timer()
         self._show_login()
         if self._missing_login_parameters():
             self._status.set(
@@ -343,6 +353,8 @@ class App(tk.Tk):
     def _clear(self) -> None:
         self._main_active = False
         self._tab_chain = []
+        self._auto_checks = {}
+        self._auto_label = None
         for child in self._container.winfo_children():
             child.destroy()
 
@@ -562,26 +574,17 @@ class App(tk.Tk):
         settings.pack(side="right", padx=4)
         header_tabs: list[tk.Widget] = []
         if self._overview:
-            # Packed from the right: Upload, Download Start, 3000m, 6000m,
-            # Edit Information, Settings, Sign out.
+            # Packed from the right: Upload, Edit Information, Settings, Sign
+            # out. The download buttons are in the bar above the list.
             edit_info = ttk.Button(
                 header, text="Edit Information ...", command=self._edit_information
             )
             edit_info.pack(side="right", padx=(4, 0))
-            downloads: list[tk.Widget] = []
-            for station in reversed(STATIONS):
-                button = ttk.Button(
-                    header,
-                    text=f"Download {station.capitalize()} ...",
-                    command=lambda s=station: self._download_export(s),
-                )
-                button.pack(side="right", padx=(4, 0))
-                downloads.insert(0, button)
             upload = ttk.Button(
                 header, text="Upload Race Info ...", command=self._upload_race_info
             )
             upload.pack(side="right", padx=(4, 0))
-            header_tabs = [upload, *downloads, edit_info]
+            header_tabs = [upload, edit_info]
         header_tabs += [settings, sign_out, self._exit_btn]
 
         self._main_active = True
@@ -589,9 +592,14 @@ class App(tk.Tk):
             body_tabs = self._build_overview_bar()
         else:
             body_tabs = self._build_record_box() + self._build_bar()
-        # Tab order: the record box, the bar above the list, then the header
-        # from left to right, and back to the boat number.
-        self._tab_chain = body_tabs + header_tabs
+        if self._overview:
+            # Tab order: the header, the bar above the list (download buttons,
+            # Refresh), then the auto download checkboxes, left to right.
+            self._tab_chain = header_tabs + body_tabs
+        else:
+            # Tab order: the record box, the bar above the list, then the
+            # header from left to right, and back to the boat number.
+            self._tab_chain = body_tabs + header_tabs
 
         # All columns exist; render switches the visible ones per view mode.
         cols = TREE_COLUMNS
@@ -781,7 +789,146 @@ class App(tk.Tk):
         ).pack(side="left", padx=12)
         refresh = ttk.Button(bar, text="Refresh", command=self._refresh_clicked)
         refresh.pack(side="right")
-        return [refresh]
+        # Packed from the right, so they end up as Start, 3000m, 6000m, Refresh.
+        downloads: list[tk.Widget] = []
+        for station in reversed(STATIONS):
+            button = ttk.Button(
+                bar,
+                text=f"Download {station.capitalize()} ...",
+                command=lambda s=station: self._download_export(s),
+            )
+            button.pack(side="right", padx=(0, 4))
+            downloads.insert(0, button)
+        return [*downloads, refresh, *self._build_auto_download_bar()]
+
+    def _build_auto_download_bar(self) -> list[tk.Widget]:
+        """Row with one checkbox per station for the automatic download."""
+        row = ttk.Frame(self._container)
+        row.pack(fill="x", pady=(4, 0))
+        ttk.Label(row, text="Auto download:").pack(side="left")
+        self._auto_checks = {}
+        self._auto_vars = {}
+        for station in STATIONS:
+            var = tk.BooleanVar(value=self.config_.auto_download.get(station, False))
+            check = ttk.Checkbutton(
+                row,
+                text=station.capitalize(),
+                variable=var,
+                command=lambda s=station: self._auto_toggled(s),
+            )
+            check.pack(side="left", padx=(8, 0))
+            self._auto_vars[station] = var
+            self._auto_checks[station] = check
+        self._auto_label = ttk.Label(row, textvariable=self._auto_text)
+        self._auto_label.pack(side="left", padx=12)
+        self._auto_text.set("")
+        self._update_auto_widgets()
+        return list(self._auto_checks.values())
+
+    def _auto_active(self, station: str) -> bool:
+        """Switched on and a file is known (from a manual download)."""
+        return bool(
+            self.config_.auto_download.get(station)
+            and self.config_.last_files.get(f"download_{station}")
+        )
+
+    def _update_auto_widgets(self) -> None:
+        """A station can only be switched on after a manual download."""
+        for station, check in self._auto_checks.items():
+            if not check.winfo_exists():
+                continue
+            known = bool(self.config_.last_files.get(f"download_{station}"))
+            check.state(["!disabled"] if known else ["disabled"])
+        if self._auto_label is not None and not self._auto_text.get():
+            known_any = any(
+                self.config_.last_files.get(f"download_{s}") for s in STATIONS
+            )
+            if self.config_.auto_download_interval_minutes == 0:
+                self._auto_text.set("off (interval 0, see Settings)")
+            elif not known_any:
+                self._auto_text.set("download a file once with its button first")
+
+    def _auto_toggled(self, station: str) -> None:
+        states = {s: v.get() for s, v in self._auto_vars.items()}
+        try:
+            save_auto_download(states)
+        except ConfigError as exc:
+            self._status.set(f"Cannot save the setting: {exc}")
+        self.config_ = replace(self.config_, auto_download=states)
+        if states[station]:
+            self._auto_download([station])  # first run right away
+
+    def _schedule_auto_timer(self) -> None:
+        """(Re)start the automatic download; an interval of 0 turns it off."""
+        if self._auto_timer_id is not None:
+            self.after_cancel(self._auto_timer_id)
+            self._auto_timer_id = None
+        minutes = self.config_.auto_download_interval_minutes
+        if minutes > 0:
+            self._auto_timer_id = self.after(minutes * 60_000, self._auto_timer)
+
+    def _auto_timer(self) -> None:
+        self._auto_timer_id = None
+        if self._main_active and self._overview:
+            self._auto_download()
+        self._schedule_auto_timer()
+
+    def _auto_download(self, only: list[str] | None = None) -> None:
+        """Save the exports of the switched-on stations to their last file.
+
+        A file is only written when its content changed, and replaced in one
+        step, so another program never reads a half written file. Errors are
+        shown in the status bar; the next run tries again.
+        """
+        if (
+            self._auto_running
+            or not self._auth.signed_in
+            or self.config_.auto_download_interval_minutes == 0
+        ):
+            return
+        stations = [s for s in (only or STATIONS) if self._auto_active(s)]
+        if not stations:
+            return
+        targets = {s: Path(self.config_.last_files[f"download_{s}"]) for s in stations}
+        tz = self.config_.timezone
+        self._auto_running = True
+
+        def work() -> dict[str, tuple[str, str]]:
+            outcome: dict[str, tuple[str, str]] = {}
+            for station, path in targets.items():
+                try:
+                    data = self._api.export(station, "trz", tz)
+                    if path.exists() and path.read_bytes() == data:
+                        outcome[station] = ("unchanged", "")
+                        continue
+                    temp = path.with_name(path.name + ".tmp")
+                    try:
+                        temp.write_bytes(data)
+                        os.replace(temp, path)
+                    finally:
+                        temp.unlink(missing_ok=True)
+                    outcome[station] = ("saved", "")
+                except Exception as exc:  # noqa: BLE001 - reported, retried later
+                    outcome[station] = ("failed", str(exc))
+            return outcome
+
+        def done(outcome: dict[str, tuple[str, str]]) -> None:
+            self._auto_running = False
+            errors = {s: m for s, (r, m) in outcome.items() if r == "failed"}
+            stamp = self._now().strftime("%H:%M:%S")
+            text = ", ".join(f"{s} {r}" for s, (r, _m) in outcome.items())
+            self._auto_text.set(f"{stamp}: {text}")
+            if self._auto_label is not None and self._auto_label.winfo_exists():
+                self._auto_label.configure(foreground="#b00" if errors else "")
+            if errors:
+                detail = "; ".join(f"{s}: {m}" for s, m in errors.items())
+                self._status.set(f"Auto download failed ({detail}), will retry.")
+
+        def failed(exc: Exception) -> None:
+            self._auto_running = False
+            self._status.set(f"Auto download failed: {exc}")
+
+        self._run_async(work, done, failed)
 
     def _edit_settings(self) -> None:
         """Dialog for timezone, race info interval and rows above the focus."""
@@ -801,6 +948,11 @@ class App(tk.Tk):
                     "Rows shown above the recorded boat",
                     str(cfg.rows_before_focus),
                 ),
+                (
+                    "auto_interval",
+                    "Auto download interval in minutes (0 = off)",
+                    str(cfg.auto_download_interval_minutes),
+                ),
             ),
             _check_settings,
             flags=(("exit", "Show the Exit button", cfg.show_exit_button),),
@@ -810,8 +962,11 @@ class App(tk.Tk):
         interval = int(values["interval"])
         rows = int(values["rows"])
         show_exit = values["exit"] == "1"
+        auto_interval = int(values["auto_interval"])
         try:
-            save_display_settings(values["timezone"], interval, rows, show_exit)
+            save_display_settings(
+                values["timezone"], interval, rows, show_exit, auto_interval
+            )
         except ConfigError as exc:
             self._status.set(str(exc))
             return
@@ -821,8 +976,12 @@ class App(tk.Tk):
             race_info_interval_minutes=interval,
             rows_before_focus=rows,
             show_exit_button=show_exit,
+            auto_download_interval_minutes=auto_interval,
         )
         self._update_exit_button()
+        self._schedule_auto_timer()
+        self._auto_text.set("")
+        self._update_auto_widgets()
         self._tz = ZoneInfo(values["timezone"])
         self._schedule_race_timer()
         self._render_timings()  # times are shown in the new timezone
@@ -1277,6 +1436,7 @@ class App(tk.Tk):
             self._status.set(f"Cannot save the file name: {exc}")
             return
         self.config_ = replace(self.config_, last_files=files)
+        self._update_auto_widgets()
 
     def _upload_race_info(self) -> None:
         key = "upload_race_info"
@@ -2309,6 +2469,8 @@ def _check_settings(values: dict[str, str]) -> str:
         return "The interval is a whole number of minutes, 0 to 9999."
     if not re.fullmatch(r"\d{1,3}", values["rows"]):
         return "The rows above the recorded boat are a whole number, 0 to 999."
+    if not re.fullmatch(r"\d{1,4}", values["auto_interval"]):
+        return "The auto download interval is a whole number of minutes, 0 to 9999."
     return ""
 
 

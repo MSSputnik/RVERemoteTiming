@@ -42,6 +42,8 @@ DEFAULT_CONFIG: dict[str, object] = {
     "race_info_interval_minutes": 5,
     "rows_before_focus": 5,
     "show_exit_button": False,
+    "auto_download_interval_minutes": 5,
+    "auto_download": {},
 }
 
 
@@ -89,6 +91,9 @@ class Config:
     race_info_interval_minutes: int = 5  # 0 disables the automatic pull
     rows_before_focus: int = 5  # rows shown above the boat just recorded
     show_exit_button: bool = False  # "Exit" button right of "Sign out"
+    auto_download_interval_minutes: int = 5  # Regattaleitung; 0 disables it
+    # Regattaleitung: stations whose export is saved automatically.
+    auto_download: dict[str, bool] = field(default_factory=dict)
     refresh_token: str = ""  # decoded; empty when login is not remembered
     # Last file used per upload/download button, e.g. {"download_start": "..."}.
     last_files: dict[str, str] = field(default_factory=dict)
@@ -155,6 +160,21 @@ def load_config(path: Path | None = None) -> Config:
     if not isinstance(show_exit_button, bool):
         raise ConfigError("show_exit_button must be true or false.")
 
+    auto_download_interval_minutes = raw.get("auto_download_interval_minutes", 5)
+    if (
+        isinstance(auto_download_interval_minutes, bool)
+        or not isinstance(auto_download_interval_minutes, int)
+        or auto_download_interval_minutes < 0
+    ):
+        raise ConfigError("auto_download_interval_minutes must be an integer >= 0.")
+
+    auto_download = raw.get("auto_download", {})
+    if not isinstance(auto_download, dict):
+        auto_download = {}
+    auto_download = {
+        s: auto_download[s] for s in STATIONS if auto_download.get(s) is True
+    }
+
     last_files = raw.get("last_files", {})
     if not isinstance(last_files, dict):
         last_files = {}
@@ -179,6 +199,8 @@ def load_config(path: Path | None = None) -> Config:
         race_info_interval_minutes=race_info_interval_minutes,
         rows_before_focus=rows_before_focus,
         show_exit_button=show_exit_button,
+        auto_download_interval_minutes=auto_download_interval_minutes,
+        auto_download=auto_download,
         refresh_token=refresh_token,
         last_files=last_files,
     )
@@ -202,6 +224,7 @@ def save_display_settings(
     race_info_interval_minutes: int,
     rows_before_focus: int,
     show_exit_button: bool,
+    auto_download_interval_minutes: int,
     path: Path | None = None,
 ) -> None:
     """Store the values of the "Settings" dialog of the main window."""
@@ -211,6 +234,7 @@ def save_display_settings(
             "race_info_interval_minutes": race_info_interval_minutes,
             "rows_before_focus": rows_before_focus,
             "show_exit_button": show_exit_button,
+            "auto_download_interval_minutes": auto_download_interval_minutes,
         },
         path,
     )
@@ -219,6 +243,11 @@ def save_display_settings(
 def save_last_files(last_files: dict[str, str], path: Path | None = None) -> None:
     """Store the last used file of every upload/download button."""
     _update_config("last_files", dict(last_files), path)
+
+
+def save_auto_download(states: dict[str, bool], path: Path | None = None) -> None:
+    """Store which stations are downloaded automatically (Regattaleitung)."""
+    _update_config("auto_download", dict(states), path)
 
 
 def save_auto_increment(value: bool, path: Path | None = None) -> None:

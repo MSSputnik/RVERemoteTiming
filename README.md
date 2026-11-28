@@ -65,6 +65,10 @@ Optional:
   `6000m` also the timings of the station before) is pulled automatically.
   Default `5`, `0` turns the automatic pull off. The "Settings ..." button of
   the main window changes it, and the new interval applies at once.
+- `auto_download_interval_minutes`: how often the Regattaleitung saves the
+  exports of the stations ticked under "Auto download" (see there). Default
+  `5`, `0` turns it off. The "Settings ..." button changes it. The ticked
+  stations are stored by the app in `auto_download`.
 - `rows_before_focus`: how many rows of the list are shown above the boat you
   just recorded, edited or deleted (and above the first boat due after a
   start or "Refresh"). Default `5`. Use a smaller number on a small screen,
@@ -213,8 +217,9 @@ The race info and the timings of all three stations are pulled at sign-in, on
 "Refresh" and every `race_info_interval_minutes` minutes. The user needs the
 group `Regattaleitung` (or `Admin`), which may read all of them.
 
-The buttons next to "Settings ..." handle the files and the information
-text of the Regattaleitung:
+The buttons "Upload Race Info ...", "Edit Information ..." (next to
+"Settings ...") and the three download buttons (left of "Refresh", above the
+list) handle the files and the information text of the Regattaleitung:
 
 - "Upload Race Info ..." asks for a CSV file (semicolon separated, header
   `boat_number;planned_start;club;race_number;race_name;distance`) and sends
@@ -233,6 +238,25 @@ text of the Regattaleitung:
 Each button remembers the last file it used in `config.json` (`last_files`)
 and preselects it next time. The first time the names are `race-info.csv`,
 `start.trz`, `3000m.trz` and `6000m.trz`.
+
+### Auto download
+
+Under the "Overview of all stations" bar, the checkboxes "Start", "3000m" and
+"6000m" save that station's export automatically, without a dialog, to the
+file of its last manual download. A checkbox is greyed out until the station
+has been downloaded once with its button.
+
+- The first run starts when you tick the box, then every
+  `auto_download_interval_minutes` minutes (default `5`, `0` turns it off;
+  "Settings ..." changes it). It only runs while signed in on this view.
+- A file is only written when its content changed. It is written to a
+  temporary file and then moved over the target, so another program never
+  reads a half written file.
+- The text next to the checkboxes shows the time and the result of the last
+  run (`saved`, `unchanged`, `failed`). On an error it turns red, the status
+  bar shows the message, and the next run tries again.
+- The ticked boxes are saved in `config.json` (`auto_download`) and stay on
+  after the next sign-in.
 
 ## Remember login
 

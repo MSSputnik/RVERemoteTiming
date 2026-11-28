@@ -125,6 +125,7 @@ After changing `pyproject.toml`, run `uv lock` so `uv.lock` follows.
   - **MD047 (single-trailing-newline):** end the file with exactly one newline.
   - **MD009 (no-trailing-spaces):** do not leave trailing whitespace on a line.
 - `npx` is installed, so run the linter instead of only inspecting by hand:
-  `npx markdownlint-cli2 <file>`. Run it on every Markdown file you create or
+  `npx --yes markdownlint-cli2 <file>`. Always pass `--yes`, otherwise npx
+  may wait for an install confirmation and the command times out. Run it on every Markdown file you create or
   edit and fix all findings. Only fall back to manual inspection if the command
   fails to run, and state that in the verification note.

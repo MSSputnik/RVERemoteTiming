@@ -142,24 +142,13 @@ class App(tk.Tk):
     def __init__(self, config: Config) -> None:
         super().__init__()
         self.config_ = config
-        # The Regattaleitung has no station: it only watches and does not record.
-        self._overview = config.station == OVERVIEW_STATION
         self._station_timings: dict[str, list[dict[str, Any]]] = {}
         self._status_note = ""  # kept in front of the next overview message
         # Information box of the station view (see _build_information_box).
         self._info_text: tk.Text | None = None
         self._info_loading = False
-        self.title(f"{APP_NAME} {APP_VERSION} - {config.station}")
         self._setup_platform_style()
-        self._setup_list_style()
-        self.minsize(int(600 * self._font_scale), 420)
-        if self._overview:
-            # A large window: 90 % of the screen height, centered. The width
-            # is capped, wider only adds empty space (e.g. ultrawide screens).
-            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-            w = min(int(sw * 0.9), int(900 * self._font_scale))
-            h = int(sh * 0.9)
-            self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 3}")
+        self._apply_station()
 
         # Validated when the configuration is loaded.
         self._tz = ZoneInfo(config.timezone)
@@ -192,13 +181,15 @@ class App(tk.Tk):
         self._sending = False
         self._arrow_images: list[tk.PhotoImage] = []
         self._race_info: list[dict[str, Any]] = []
-        # 3000m and 6000m show the boats of the station before instead of the
-        # race info: start -> 3000m -> 6000m.
-        self._upstream_station = UPSTREAM_STATION.get(config.station)
         self._upstream: list[dict[str, Any]] = []
-        self._upstream_label = (
-            self._upstream_station.capitalize() if self._upstream_station else ""
-        )
+        # Boat of every row of the list (by iid), for "tap a row to fill the
+        # boat number", also for rows without a timing yet.
+        self._row_boats: dict[str, int] = {}
+        # Prefill of the boat number once after sign-in, see _suggest_boat.
+        self._boat_suggested = False
+        self._timings_loaded = False
+        self._context_loaded = False  # race info, or the station before
+        self._boat_entry: ttk.Entry | None = None  # set by the record box
         self._focus_boat: int | None = None  # boat to scroll to on next render
         self._fresh_view = True  # scroll to the boats due now on next render
 
@@ -241,6 +232,31 @@ class App(tk.Tk):
             self._auto_login(config.refresh_token)
 
     # ---- helpers -------------------------------------------------------
+
+    def _apply_station(self) -> None:
+        """Set up everything that depends on the configured station.
+
+        Called at start and when the station is changed on the sign-in screen.
+        """
+        station = self.config_.station
+        # The Regattaleitung has no station: it only watches and does not record.
+        self._overview = station == OVERVIEW_STATION
+        # 3000m and 6000m show the boats of the station before instead of the
+        # race info: start -> 3000m -> 6000m.
+        self._upstream_station = UPSTREAM_STATION.get(station)
+        self._upstream_label = (
+            self._upstream_station.capitalize() if self._upstream_station else ""
+        )
+        self.title(f"{APP_NAME} {APP_VERSION} - {station}")
+        self._setup_list_style()
+        self.minsize(int(600 * self._font_scale), 420)
+        if self._overview:
+            # A large window: 90 % of the screen height, centered. The width
+            # is capped, wider only adds empty space (e.g. ultrawide screens).
+            sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+            w = min(int(sw * 0.9), int(900 * self._font_scale))
+            h = int(sh * 0.9)
+            self.geometry(f"{w}x{h}+{(sw - w) // 2}+{(sh - h) // 3}")
 
     def _build_clients(self) -> None:
         """Create the Cognito and API clients from the current configuration."""
@@ -336,9 +352,11 @@ class App(tk.Tk):
         self._clear()
         frame = ttk.Frame(self._container)
         frame.place(relx=0.5, rely=0.4, anchor="center")
-        ttk.Label(frame, text="Sign in", font=("TkDefaultFont", 14, "bold")).grid(
-            row=0, column=0, columnspan=2, pady=(0, 10)
-        )
+        ttk.Label(
+            frame,
+            text=f"Sign in to {self._station_name()}",
+            font=("TkDefaultFont", 14, "bold"),
+        ).grid(row=0, column=0, columnspan=2, pady=(0, 10))
         ttk.Label(frame, text="Username").grid(
             row=1, column=0, sticky="e", padx=4, pady=4
         )
@@ -348,21 +366,38 @@ class App(tk.Tk):
         self._user_var = tk.StringVar(value=self.config_.username)
         self._pw_var = tk.StringVar()
         user = ttk.Entry(frame, textvariable=self._user_var, width=30)
-        pw = ttk.Entry(frame, textvariable=self._pw_var, show="*", width=30)
-        user.grid(row=1, column=1, pady=4)
-        pw.grid(row=2, column=1, pady=4)
+        # Courier: 1, l and I are easy to tell apart when the password is shown.
+        base = tkfont.nametofont("TkDefaultFont")
+        self._pw_font = tkfont.Font(family="Courier", size=base.cget("size"))
+        pw = ttk.Entry(
+            frame, textvariable=self._pw_var, show="*", width=30, font=self._pw_font
+        )
+        user.grid(row=1, column=1, sticky="ew", pady=4)
+        pw.grid(row=2, column=1, sticky="ew", pady=4)
+        self._show_pw_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(
+            frame,
+            text="Show password",
+            variable=self._show_pw_var,
+            command=lambda: pw.configure(show="" if self._show_pw_var.get() else "*"),
+        ).grid(row=3, column=1, sticky="w")
         self._remember_var = tk.BooleanVar(value=bool(self.config_.refresh_token))
         ttk.Checkbutton(frame, text="Remember login", variable=self._remember_var).grid(
-            row=3, column=1, sticky="w"
+            row=4, column=1, sticky="w"
         )
         self._login_btn = ttk.Button(frame, text="Sign in", command=self._do_login)
-        self._login_btn.grid(row=4, column=0, columnspan=2, pady=(10, 4))
+        self._login_btn.grid(row=5, column=0, columnspan=2, pady=(10, 4))
         ttk.Button(
             frame, text="Set Login Parameters ...", command=self._set_login_parameters
-        ).grid(row=5, column=0, columnspan=2, pady=(0, 4))
+        ).grid(row=6, column=0, columnspan=2, pady=(0, 4))
         for w in (user, pw):
             w.bind("<Return>", lambda _e: self._do_login())
         (pw if self._user_var.get() else user).focus_set()
+
+    def _station_name(self) -> str:
+        if self._overview:
+            return "Regattaleitung"
+        return self.config_.station
 
     def _do_login(self) -> None:
         missing = self._missing_login_parameters()
@@ -418,6 +453,7 @@ class App(tk.Tk):
                 region=values["region"],
                 base_url=values["base_url"],
                 timezone=values["timezone"],
+                station=values["station"],
             )
         except ConfigError as exc:
             self._status.set(str(exc))
@@ -428,9 +464,13 @@ class App(tk.Tk):
             region=values["region"],
             base_url=values["base_url"],
             timezone=values["timezone"],
+            station=values["station"],
         )
         self._tz = ZoneInfo(values["timezone"])
         self._build_clients()
+        if values["station"] != old.station:
+            self._apply_station()
+            self._show_login()  # shows the new station
         if (values["client_id"], values["region"]) != (old.client_id, old.region):
             # A stored refresh token only works for the user pool it came from.
             self._forget_refresh_token()
@@ -604,11 +644,18 @@ class App(tk.Tk):
         if not self._overview:
             self._tree.bind("<Delete>", lambda _e: self._delete_selected())
             self._tree.bind("<Double-1>", lambda _e: self._edit_selected())
+            # A tap on a row, or Up/Down in the list, takes its boat number.
+            self._tree.bind("<ButtonRelease-1>", self._tree_clicked)
+            for key in ("<KeyRelease-Up>", "<KeyRelease-Down>"):
+                self._tree.bind(key, self._tree_key_released)
         self._items: dict[str, dict[str, Any]] = {}
         self._all_items: list[dict[str, Any]] = []
 
         self._update_pending_label()
         self._fresh_view = True
+        self._boat_suggested = False
+        self._timings_loaded = False
+        self._context_loaded = False
         self._refresh_race_info()
         self._refresh()
 
@@ -659,6 +706,7 @@ class App(tk.Tk):
             for key in (f"<{letter}>", f"<{letter.upper()}>"):
                 boat.bind(key, lambda _e, a=action: self._shortcut(a) or "break")
         boat.focus_set()
+        self._boat_entry = boat
         arrows = ttk.Frame(entry_frame)
         arrows.pack(side="left", padx=(0, 6))
         self._arrow_button(arrows, True, lambda: self._step_boat(1)).pack()
@@ -932,7 +980,11 @@ class App(tk.Tk):
         font may lack the triangle glyphs (Windows keeps the text glyph)."""
         if not IS_LINUX:
             return ttk.Button(
-                parent, text="\u25b2" if up else "\u25bc", width=3, command=command
+                parent,
+                text="\u25b2" if up else "\u25bc",
+                width=3,
+                command=command,
+                takefocus=False,  # Tab skips the arrow buttons
             )
         # The image is measured in pixels, but the fonts follow the screen
         # DPI. On a high-DPI screen (e.g. Android) it would be tiny, so it
@@ -943,10 +995,16 @@ class App(tk.Tk):
         # More padding as well, the button is touched with a finger there.
         pad = round(4 * (factor - 1))
         if pad == 0:  # a normal screen: the button stays as it was
-            return ttk.Button(parent, image=image, command=command)
+            return ttk.Button(parent, image=image, command=command, takefocus=False)
         style = ttk.Style(self)
         style.configure("Arrow.TButton", padding=(pad, pad))
-        return ttk.Button(parent, image=image, style="Arrow.TButton", command=command)
+        return ttk.Button(
+            parent,
+            image=image,
+            style="Arrow.TButton",
+            command=command,
+            takefocus=False,
+        )
 
     def _setup_list_style(self) -> None:
         """Make the font of the timing list larger than the default.
@@ -1042,6 +1100,7 @@ class App(tk.Tk):
 
     def _show_timings(self, items: list[dict[str, Any]]) -> None:
         self._all_items = items
+        self._timings_loaded = True
         self._render_timings()
 
     def _refresh_clicked(self) -> None:
@@ -1330,11 +1389,13 @@ class App(tk.Tk):
         if data.get("race_error"):
             message += f" Race info failed: {data['race_error']}"
         self._status.set(message)
+        self._context_loaded = True
         self._render_timings()
         self._fresh_view = False
 
     def _race_info_loaded(self, items: list[dict[str, Any]]) -> None:
         self._race_info = items
+        self._context_loaded = True
         boats = sum(1 for r in items if not r.get("deleted"))
         self._status.set(
             f"Race info updated at {self._now().strftime('%H:%M:%S')}: {boats} boats."
@@ -1645,6 +1706,7 @@ class App(tk.Tk):
         selected = self._tree.selection()
         self._tree.delete(*self._tree.get_children())
         self._items = {}
+        self._row_boats = {}
         columns = self._view_columns(show_all)
         if tuple(self._tree.cget("displaycolumns")) != columns:
             self._tree.configure(displaycolumns=columns)
@@ -1664,6 +1726,7 @@ class App(tk.Tk):
                 "", "end", iid=row.iid, values=row.values, tags=(*row.tags, stripe)
             )
             shown.append(row)
+            self._row_boats[row.iid] = row.boat
         keep = [i for i in selected if self._tree.exists(i)]
         if keep:
             self._tree.selection_set(keep)
@@ -1672,6 +1735,66 @@ class App(tk.Tk):
             self._focus_boat = None
         else:
             self._tree.yview_moveto(top)
+        if not show_all:
+            self._suggest_boat(shown)
+
+    def _tree_clicked(self, event: tk.Event) -> None:
+        """A tap on a row puts its boat number into the record box."""
+        self._pick_boat(self._tree.identify_row(event.y))
+
+    def _tree_key_released(self, _event: tk.Event) -> None:
+        """Moving through the list with Up/Down does the same."""
+        selection = self._tree.selection()
+        if selection:
+            self._pick_boat(selection[0])
+
+    def _pick_boat(self, iid: str) -> None:
+        boat = self._row_boats.get(iid)
+        if boat is not None and self._recording():
+            self._boat_var.set(str(boat))
+
+    def _suggest_boat(self, rows: list[Row]) -> None:
+        """Once after sign-in: fill the empty boat number with the boat to expect.
+
+        Waits until the timings and the race info (or the timings of the
+        station before) are loaded, and never overwrites what the user typed.
+        """
+        if (
+            self._boat_suggested
+            or not self._recording()
+            or not (self._timings_loaded and self._context_loaded)
+        ):
+            return
+        self._boat_suggested = True
+        if self._boat_var.get().strip():
+            return
+        boat: int | None = None
+        if self._upstream_station:
+            # First boat that passed the station before and not this one yet.
+            boat = next((r.boat for r in rows if r.waiting), None)
+        else:
+            recorded = {
+                i["boat_number"]
+                for i in self._all_items
+                if i["current"] and not i.get("deleted")
+            }
+            now = self._now().time()
+            start = next(
+                (n for n, r in enumerate(rows) if r.planned and r.planned >= now), 0
+            )
+            # Planned order, from the boats due now on, first one not recorded.
+            boat = next(
+                (
+                    r.boat
+                    for r in rows[start:]
+                    if not r.unknown and r.boat not in recorded
+                ),
+                None,
+            )
+        if boat is not None:
+            self._boat_var.set(str(boat))
+            if self._boat_entry is not None:
+                self._boat_entry.select_range(0, "end")  # typing replaces it
 
     def _view_columns(self, show_all: bool) -> tuple[str, ...]:
         """The visible columns of the current view."""
@@ -1949,9 +2072,12 @@ def _ask_fields(
     fields: tuple[tuple[str, str, str], ...],
     check: Callable[[dict[str, str]], str],
     flags: tuple[tuple[str, str, bool], ...] = (),
+    choices: dict[str, tuple[str, ...]] | None = None,
 ) -> dict[str, str] | None:
     """Modal dialog with one text field per (key, label, value).
 
+    choices maps a field key to its allowed values; that field is a drop-down
+    list instead of a free text field.
     flags are checkboxes (key, label, state) below the fields; their value in
     the result is "1" or "0".
     check returns a message for the first invalid value, or an empty string.
@@ -1968,8 +2094,18 @@ def _ask_fields(
     for row, (key, label, value) in enumerate(fields):
         ttk.Label(frame, text=label).grid(row=row, column=0, sticky="e", padx=4, pady=4)
         variables[key] = tk.StringVar(value=value)
-        entry = ttk.Entry(frame, textvariable=variables[key], width=48)
-        entry.grid(row=row, column=1, pady=4)
+        entry: ttk.Entry | ttk.Combobox
+        if choices and key in choices:
+            entry = ttk.Combobox(
+                frame,
+                textvariable=variables[key],
+                values=choices[key],
+                state="readonly",
+                width=45,
+            )
+        else:
+            entry = ttk.Entry(frame, textvariable=variables[key], width=48)
+        entry.grid(row=row, column=1, sticky="w", pady=4)
         first = first or entry
     flag_vars: dict[str, tk.BooleanVar] = {}
     for n, (key, label, state) in enumerate(flags, start=len(fields)):
@@ -2156,8 +2292,10 @@ def _ask_login_parameters(parent: tk.Tk, config: Config) -> dict[str, str] | Non
             ("region", "Region (e.g. eu-west-1)", config.region),
             ("base_url", "Base URL", config.base_url),
             ("timezone", "Timezone (e.g. Europe/Berlin)", config.timezone),
+            ("station", "Station", config.station),
         ),
         _check_login_parameters,
+        choices={"station": (*STATIONS, OVERVIEW_STATION)},
     )
 
 
@@ -2189,16 +2327,7 @@ def _check_login_parameters(values: dict[str, str]) -> str:
     return ""
 
 
-def _parse_time(text: str, base: datetime) -> datetime | None:
-    """Parse HH:MM:SS[.fff] on the date and timezone of base."""
-    try:
-        t = time.fromisoformat(text.strip())
-    except ValueError:
-        return None
-    return datetime.combine(base.date(), t, tzinfo=base.tzinfo)
-
-
-def _ask_time(parent: tk.Tk, boat: int, old: datetime) -> datetime | None:
+def _ask_time(parent: "App", boat: int, old: datetime) -> datetime | None:
     """Modal dialog to change a passing time. Returns None when cancelled."""
     dlg = tk.Toplevel(parent)
     dlg.title(f"Edit time - boat {boat}")
@@ -2206,12 +2335,60 @@ def _ask_time(parent: tk.Tk, boat: int, old: datetime) -> datetime | None:
     dlg.resizable(False, False)
     frame = ttk.Frame(dlg, padding=12)
     frame.pack()
-    ttk.Label(frame, text=f"Passed at (HH:MM:SS), date {old.date().isoformat()}").grid(
-        row=0, column=0, columnspan=2, pady=(0, 6)
+    ttk.Label(
+        frame,
+        text=f"Passed at (hours, minutes, seconds), date {old.date().isoformat()}",
+    ).grid(row=0, column=0, columnspan=2, pady=(0, 6))
+    # One field per part with its own arrow buttons on the right; the values
+    # roll over (23 -> 0, 59 -> 0 and the other way round).
+    fields = ttk.Frame(frame)
+    fields.grid(row=1, column=0, columnspan=2)
+    parts = (
+        ("hour", old.hour, 24),
+        ("minute", old.minute, 60),
+        ("second", old.second, 60),
     )
-    var = tk.StringVar(value=old.strftime("%H:%M:%S"))
-    entry = ttk.Entry(frame, textvariable=var, width=14, justify="center")
-    entry.grid(row=1, column=0, columnspan=2, pady=4)
+    variables: list[tk.StringVar] = []
+    entries: list[ttk.Entry] = []
+    for n, (_name, value, modulus) in enumerate(parts):
+        if n:
+            ttk.Label(fields, text=":", font=("TkDefaultFont", 22)).grid(
+                row=0, column=3 * n - 1, padx=4
+            )
+        var = tk.StringVar(value=f"{value:02d}")
+
+        def step(
+            delta: int,
+            var: tk.StringVar = var,
+            modulus: int = modulus,
+            start: int = value,
+        ) -> None:
+            text = var.get().strip()
+            current = int(text) if text.isdigit() else start
+            var.set(f"{(current + delta) % modulus:02d}")
+
+        entry = ttk.Entry(
+            fields,
+            textvariable=var,
+            width=3,
+            font=("TkDefaultFont", 22),
+            justify="center",
+        )
+        entry.grid(row=0, column=3 * n, sticky="ns")
+        arrows = ttk.Frame(fields)
+        arrows.grid(row=0, column=3 * n + 1, padx=(6, 0))
+        parent._arrow_button(arrows, True, lambda s=step: s(1)).pack()
+        parent._arrow_button(arrows, False, lambda s=step: s(-1)).pack()
+        # Up/h count up, Down/r count down; "break" keeps the letter out.
+        entry.bind("<Up>", lambda _e, s=step: s(1) or "break")
+        entry.bind("<Down>", lambda _e, s=step: s(-1) or "break")
+        for letter, delta in (("h", 1), ("r", -1)):
+            for key in (f"<{letter}>", f"<{letter.upper()}>"):
+                entry.bind(key, lambda _e, s=step, d=delta: s(d) or "break")
+        variables.append(var)
+        entries.append(entry)
+    for n in range(2):  # a wider gap between the three groups
+        fields.columnconfigure(3 * n + 2, minsize=6)
     error = tk.StringVar()
     ttk.Label(frame, textvariable=error, foreground="#b00").grid(
         row=2, column=0, columnspan=2
@@ -2219,19 +2396,28 @@ def _ask_time(parent: tk.Tk, boat: int, old: datetime) -> datetime | None:
     result: list[datetime] = []
 
     def ok() -> None:
-        new = _parse_time(var.get(), old)
-        if new is None:
-            error.set("Use the format HH:MM:SS")
-            return
-        result.append(new)
+        numbers: list[int] = []
+        for var, (_name, _value, modulus) in zip(variables, parts, strict=True):
+            text = var.get().strip()
+            if not text.isdigit() or int(text) >= modulus:
+                error.set(
+                    "Hours are 0 to 23, minutes and seconds 0 to 59 (whole numbers)."
+                )
+                return
+            numbers.append(int(text))
+        result.append(
+            datetime.combine(
+                old.date(), time(numbers[0], numbers[1], numbers[2]), tzinfo=old.tzinfo
+            )
+        )
         dlg.destroy()
 
     ttk.Button(frame, text="Update", command=ok).grid(row=3, column=0, pady=8)
     ttk.Button(frame, text="Cancel", command=dlg.destroy).grid(row=3, column=1)
     dlg.bind("<Return>", lambda _e: ok())
     dlg.bind("<Escape>", lambda _e: dlg.destroy())
-    entry.focus_set()
-    entry.select_range(0, "end")
+    entries[0].focus_set()
+    entries[0].select_range(0, "end")
     _center_on(dlg, parent)
     dlg.grab_set()
     parent.wait_window(dlg)

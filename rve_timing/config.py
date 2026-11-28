@@ -236,6 +236,7 @@ def save_login_parameters(
     region: str,
     base_url: str,
     timezone: str,
+    station: str,
     path: Path | None = None,
 ) -> None:
     """Store the values of the "Set Login Parameters" dialog."""
@@ -245,6 +246,7 @@ def save_login_parameters(
             "region": region,
             "base_url": base_url,
             "timezone": timezone,
+            "station": station,
         },
         path,
     )
